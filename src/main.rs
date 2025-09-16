@@ -1,4 +1,5 @@
 use openaction::*;
+use pulsectl::controllers::types::ApplicationInfo;
 use pulsectl::controllers::{AppControl, SinkController};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -11,6 +12,7 @@ struct VolumeApplicationColumn {
     volume_down_context: String,
     app_index: u32,
     app_name: String,
+    app_mute: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -114,6 +116,37 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 switch_profile(outbound, "Sound".to_string()).await.unwrap();
                 Ok(())
             }
+            "com.victormarin.volume-controller.auto-detection.blank" => {
+                let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
+                let column_key = event.payload.coordinates.column;
+
+                if let Some(column) = columns.get_mut(&column_key) {
+                    let mut controller = SinkController::create().unwrap();
+
+                    match event.payload.coordinates.row {
+                        0 => {
+                            println!("Muting app {}", column.app_name);
+                            column.app_mute = !column.app_mute;
+                            controller
+                                .set_app_mute(column.app_index, column.app_mute)
+                                .unwrap();
+                        }
+                        1 => {
+                            println!("Volume up app {}", column.app_name);
+                            // Volume up
+                            controller.increase_app_volume_by_percent(column.app_index, 0.05);
+                        }
+                        2 => {
+                            println!("Volume down app {}", column.app_name);
+                            // Volume down
+                            controller.decrease_app_volume_by_percent(column.app_index, 0.05);
+                        }
+                        _ => {}
+                    }
+                }
+
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -187,11 +220,8 @@ async fn create_application_volume_columns() {
                 volume_up_context: String::new(),
                 volume_down_context: String::new(),
                 app_index: app.index,
-                app_name: app
-                    .name
-                    .as_ref()
-                    .unwrap_or(&"Unknown App".to_string())
-                    .clone(),
+                app_name: get_application_name(&app),
+                app_mute: app.mute,
             },
         );
 
@@ -199,6 +229,80 @@ async fn create_application_volume_columns() {
     }
 
     println!("I AM DONE COLUMNING: {:?}", columns);
+}
+
+fn get_application_name(app: &ApplicationInfo) -> String {
+    // First, check if the main name field has a meaningful value
+    if let Some(name) = &app.name {
+        if !is_generic_name(name) {
+            return name.clone();
+        }
+    }
+
+    // Access proplist directly (it's not an Option)
+    let proplist = &app.proplist;
+
+    // Check application.name first (usually the best)
+    if let Some(app_name) = proplist.get_str("application.name") {
+        if !is_generic_name(&app_name) {
+            return app_name;
+        }
+    }
+
+    // Check application.process.binary (executable name)
+    if let Some(binary) = proplist.get_str("application.process.binary") {
+        if !is_generic_name(&binary) {
+            return binary;
+        }
+    }
+
+    // Check media.name (often has song/video titles)
+    if let Some(media_name) = proplist.get_str("media.name") {
+        if !is_generic_name(&media_name) {
+            return format!("Media: {}", media_name);
+        }
+    }
+
+    // Check application.icon_name (sometimes useful)
+    if let Some(icon_name) = proplist.get_str("application.icon_name") {
+        if !is_generic_name(&icon_name) {
+            return icon_name;
+        }
+    }
+
+    // Check for browser-specific properties
+    if let Some(role) = proplist.get_str("media.role") {
+        if role == "music" || role == "video" {
+            // For browsers playing media, try to get more specific info
+            if let Some(title) = proplist.get_str("media.title") {
+                return format!("Browser: {}", title);
+            }
+            if let Some(artist) = proplist.get_str("media.artist") {
+                return format!("Music: {}", artist);
+            }
+        }
+    }
+
+    // Absolute fallback
+    app.name
+        .as_deref()
+        .unwrap_or("Unknown Application")
+        .to_string()
+}
+
+fn is_generic_name(name: &str) -> bool {
+    let generic_names = [
+        "Playback",
+        "playback",
+        "ALSA",
+        "PulseAudio",
+        "output",
+        "sink",
+        "stream",
+        "",
+    ];
+
+    generic_names.contains(&name) || name.trim().is_empty()
 }
 
 #[tokio::main]
