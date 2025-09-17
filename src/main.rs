@@ -1,9 +1,12 @@
 use openaction::*;
-use pulsectl::controllers::types::ApplicationInfo;
 use pulsectl::controllers::{AppControl, SinkController};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
+
+mod audio;
+mod switch_profile;
+mod utils;
 
 #[derive(Clone, Debug)]
 struct VolumeApplicationColumn {
@@ -13,13 +16,6 @@ struct VolumeApplicationColumn {
     app_index: u32,
     app_name: String,
     app_mute: bool,
-}
-
-#[derive(serde::Serialize)]
-struct SwitchProfileEvent {
-    event: &'static str,
-    device: String,
-    profile: String,
 }
 
 static VOLUME_APPLICATION_COLUMNS: LazyLock<Mutex<HashMap<u8, VolumeApplicationColumn>>> =
@@ -107,13 +103,17 @@ impl openaction::ActionEventHandler for ActionEventHandler {
             "com.victormarin.volume-controller.back-to-profile" => {
                 println!("I AM DEFINITELY HERE");
                 clear_screen(outbound).await.unwrap();
-                switch_profile(outbound, "Test".to_string()).await.unwrap();
+                switch_profile::run(outbound, "Test".to_string())
+                    .await
+                    .unwrap();
                 Ok(())
             }
             "com.victormarin.volume-controller.auto-detection" => {
                 println!("I AM CONNECTED");
                 create_application_volume_columns().await;
-                switch_profile(outbound, "Sound".to_string()).await.unwrap();
+                switch_profile::run(outbound, "Sound".to_string())
+                    .await
+                    .unwrap();
                 Ok(())
             }
             "com.victormarin.volume-controller.auto-detection.blank" => {
@@ -121,25 +121,27 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 let column_key = event.payload.coordinates.column;
 
                 if let Some(column) = columns.get_mut(&column_key) {
-                    let mut controller = SinkController::create().unwrap();
+                    let mut audio_system = audio::create_audio_system();
 
                     match event.payload.coordinates.row {
                         0 => {
                             println!("Muting app {}", column.app_name);
                             column.app_mute = !column.app_mute;
-                            controller
-                                .set_app_mute(column.app_index, column.app_mute)
+                            audio_system
+                                .mute_volume(column.app_index, column.app_mute)
                                 .unwrap();
                         }
                         1 => {
                             println!("Volume up app {}", column.app_name);
-                            // Volume up
-                            controller.increase_app_volume_by_percent(column.app_index, 0.05);
+                            audio_system
+                                .increase_volume(column.app_index, 0.05)
+                                .unwrap();
                         }
                         2 => {
                             println!("Volume down app {}", column.app_name);
-                            // Volume down
-                            controller.decrease_app_volume_by_percent(column.app_index, 0.05);
+                            audio_system
+                                .decrease_volume(column.app_index, 0.05)
+                                .unwrap();
                         }
                         _ => {}
                     }
@@ -150,22 +152,6 @@ impl openaction::ActionEventHandler for ActionEventHandler {
             _ => Ok(()),
         }
     }
-}
-
-async fn switch_profile(
-    outbound: &mut OutboundEventManager,
-    profile: String,
-) -> EventHandlerResult {
-    outbound
-        .send_event(SwitchProfileEvent {
-            event: "switchProfile",
-            device: "sd-DL08M2A38870".to_string(),
-            profile,
-        })
-        .await?;
-
-    println!("SENT SWITCH PROFILE EVENT");
-    Ok(())
 }
 
 async fn clear_screen(outbound: &mut OutboundEventManager) -> EventHandlerResult {
@@ -220,7 +206,7 @@ async fn create_application_volume_columns() {
                 volume_up_context: String::new(),
                 volume_down_context: String::new(),
                 app_index: app.index,
-                app_name: get_application_name(&app),
+                app_name: utils::get_application_name(&app),
                 app_mute: app.mute,
             },
         );
@@ -229,80 +215,6 @@ async fn create_application_volume_columns() {
     }
 
     println!("I AM DONE COLUMNING: {:?}", columns);
-}
-
-fn get_application_name(app: &ApplicationInfo) -> String {
-    // First, check if the main name field has a meaningful value
-    if let Some(name) = &app.name {
-        if !is_generic_name(name) {
-            return name.clone();
-        }
-    }
-
-    // Access proplist directly (it's not an Option)
-    let proplist = &app.proplist;
-
-    // Check application.name first (usually the best)
-    if let Some(app_name) = proplist.get_str("application.name") {
-        if !is_generic_name(&app_name) {
-            return app_name;
-        }
-    }
-
-    // Check application.process.binary (executable name)
-    if let Some(binary) = proplist.get_str("application.process.binary") {
-        if !is_generic_name(&binary) {
-            return binary;
-        }
-    }
-
-    // Check media.name (often has song/video titles)
-    if let Some(media_name) = proplist.get_str("media.name") {
-        if !is_generic_name(&media_name) {
-            return format!("Media: {}", media_name);
-        }
-    }
-
-    // Check application.icon_name (sometimes useful)
-    if let Some(icon_name) = proplist.get_str("application.icon_name") {
-        if !is_generic_name(&icon_name) {
-            return icon_name;
-        }
-    }
-
-    // Check for browser-specific properties
-    if let Some(role) = proplist.get_str("media.role") {
-        if role == "music" || role == "video" {
-            // For browsers playing media, try to get more specific info
-            if let Some(title) = proplist.get_str("media.title") {
-                return format!("Browser: {}", title);
-            }
-            if let Some(artist) = proplist.get_str("media.artist") {
-                return format!("Music: {}", artist);
-            }
-        }
-    }
-
-    // Absolute fallback
-    app.name
-        .as_deref()
-        .unwrap_or("Unknown Application")
-        .to_string()
-}
-
-fn is_generic_name(name: &str) -> bool {
-    let generic_names = [
-        "Playback",
-        "playback",
-        "ALSA",
-        "PulseAudio",
-        "output",
-        "sink",
-        "stream",
-        "",
-    ];
-
-    generic_names.contains(&name) || name.trim().is_empty()
 }
 
 #[tokio::main]
