@@ -1,6 +1,14 @@
 use std::error::Error;
 
+#[derive(Debug)]
+pub struct AppInfo {
+    pub uid: u32,
+    pub name: String,
+    pub mute: bool,
+}
+
 pub trait AudioSystem {
+    fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>>;
     fn increase_volume(&mut self, app_index: u32, percent: f64) -> Result<(), Box<dyn Error>>;
     fn decrease_volume(&mut self, app_index: u32, percent: f64) -> Result<(), Box<dyn Error>>;
     fn mute_volume(&mut self, app_index: u32, mute: bool) -> Result<(), Box<dyn Error>>;
