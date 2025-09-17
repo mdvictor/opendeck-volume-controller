@@ -99,6 +99,21 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                     .unwrap();
                 Ok(())
             }
+            "com.victormarin.volume-controller.manual-detection" => {
+                println!("THIS IS A MANUAL REFRESH");
+                utils::clear_screen(outbound).await.unwrap();
+                let applications = {
+                    let mut audio_system = audio::create_audio_system();
+                    audio_system
+                        .list_applications()
+                        .expect("Error fetching applications from SinkController")
+                };
+                utils::create_application_volume_columns(applications).await;
+                switch_profile::run(outbound, "Sound".to_string())
+                    .await
+                    .unwrap();
+                Ok(())
+            }
             "com.victormarin.volume-controller.auto-detection.blank" => {
                 let mut columns = utils::VOLUME_APPLICATION_COLUMNS.lock().await;
                 let column_key = event.payload.coordinates.column;
