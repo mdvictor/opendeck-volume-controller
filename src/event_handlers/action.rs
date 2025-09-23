@@ -1,4 +1,4 @@
-use crate::{audio, switch_profile, utils};
+use crate::{audio, gfx, switch_profile, utils};
 use openaction::*;
 
 pub struct ActionEventHandler {}
@@ -36,6 +36,10 @@ impl openaction::ActionEventHandler for ActionEventHandler {
             }
             1 => {
                 column.volume_up_context = event.context.clone();
+                let img = gfx::get_volume_bar_data_uri(30.0)?;
+                outbound
+                    .set_image(column.volume_up_context.clone(), Some(img), Some(0))
+                    .await?;
                 outbound
                     .set_title(
                         column.volume_up_context.clone(),
