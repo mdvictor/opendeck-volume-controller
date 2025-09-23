@@ -1,22 +1,73 @@
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose};
 use image::{ImageBuffer, Rgb, RgbImage};
+use std::collections::HashMap;
+use std::fmt;
 use std::io::Cursor;
+use std::sync::{Mutex, OnceLock};
 
-/// Generate a volume bar image for Stream Deck (144x144)
-pub fn generate_volume_bar(volume_percent: f32, background_color: Rgb<u8>) -> RgbImage {
-    const WIDTH: u32 = 144;
-    const HEIGHT: u32 = 144;
+static VOLUME_BAR_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+#[derive(Debug)]
+pub enum BarPosition {
+    Upper,
+    Lower,
+}
+
+impl fmt::Display for BarPosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BarPosition::Upper => write!(f, "Upper"),
+            BarPosition::Lower => write!(f, "Lower"),
+        }
+    }
+}
+
+// Helper function to get or initialize the cache
+fn get_cache() -> &'static Mutex<HashMap<String, String>> {
+    VOLUME_BAR_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// Generate a cache key for the volume bar
+fn generate_cache_key(volume_percent: f32, position: BarPosition) -> String {
+    format!("vol_{:.1}_part_{}", volume_percent, position)
+}
+
+pub fn set_cached_value(key: String, value: String) -> Result<(), String> {
+    match get_cache().lock() {
+        Ok(mut cache) => {
+            cache.insert(key, value);
+            Ok(())
+        }
+        Err(_) => Err("Failed to acquire cache lock".to_string()),
+    }
+}
+fn get_cached_value_safe(key: &str) -> Result<Option<String>, String> {
+    match get_cache().lock() {
+        Ok(cache) => Ok(cache.get(key).cloned()),
+        Err(_) => Err("Failed to acquire cache lock".to_string()),
+    }
+}
+
+/// Generate a volume bar image spanning 2 Stream Deck icons (288x144 total)
+/// Returns (top_image, bottom_image) as separate 144x144 images
+pub fn generate_volume_bar_split(
+    volume_percent: f32,
+    background_color: Rgb<u8>,
+) -> (RgbImage, RgbImage) {
+    const ICON_WIDTH: u32 = 144;
+    const ICON_HEIGHT: u32 = 144;
+    const TOTAL_HEIGHT: u32 = 288; // 2 icons vertically
     const BAR_WIDTH: u32 = 12;
-    const BAR_HEIGHT: u32 = 100;
+    const BAR_HEIGHT: u32 = 240; // Taller bar spanning both icons
     const CIRCLE_RADIUS: u32 = 8;
 
-    // Create the image buffer
-    let mut img = ImageBuffer::from_pixel(WIDTH, HEIGHT, background_color);
+    // Create the full-size image buffer (288x144)
+    let mut full_img = ImageBuffer::from_pixel(ICON_WIDTH, TOTAL_HEIGHT, background_color);
 
     // Calculate bar position (centered horizontally)
-    let bar_x = (WIDTH - BAR_WIDTH) / 2;
-    let bar_y = (HEIGHT - BAR_HEIGHT) / 2;
+    let bar_x = (ICON_WIDTH - BAR_WIDTH) / 2;
+    let bar_y = (TOTAL_HEIGHT - BAR_HEIGHT) / 2; // Centered vertically in the full image
 
     // Colors
     let bar_background = Rgb([60, 60, 60]); // Dark gray for empty bar
@@ -26,7 +77,7 @@ pub fn generate_volume_bar(volume_percent: f32, background_color: Rgb<u8>) -> Rg
 
     // Draw the bar background
     draw_filled_rectangle(
-        &mut img,
+        &mut full_img,
         bar_x,
         bar_y,
         BAR_WIDTH,
@@ -40,7 +91,14 @@ pub fn generate_volume_bar(volume_percent: f32, background_color: Rgb<u8>) -> Rg
 
     // Draw the filled portion (from bottom up)
     if fill_height > 0 {
-        draw_filled_rectangle(&mut img, bar_x, fill_y, BAR_WIDTH, fill_height, bar_fill);
+        draw_filled_rectangle(
+            &mut full_img,
+            bar_x,
+            fill_y,
+            BAR_WIDTH,
+            fill_height,
+            bar_fill,
+        );
     }
 
     // Calculate circle position on the bar
@@ -49,15 +107,41 @@ pub fn generate_volume_bar(volume_percent: f32, background_color: Rgb<u8>) -> Rg
 
     // Draw the circle with border
     draw_filled_circle(
-        &mut img,
+        &mut full_img,
         circle_x,
         circle_y,
         CIRCLE_RADIUS + 1,
         circle_border,
     );
-    draw_filled_circle(&mut img, circle_x, circle_y, CIRCLE_RADIUS, circle_color);
+    draw_filled_circle(
+        &mut full_img,
+        circle_x,
+        circle_y,
+        CIRCLE_RADIUS,
+        circle_color,
+    );
 
-    img
+    // Split the image into top and bottom halves
+    let mut top_img = ImageBuffer::from_pixel(ICON_WIDTH, ICON_HEIGHT, background_color);
+    let mut bottom_img = ImageBuffer::from_pixel(ICON_WIDTH, ICON_HEIGHT, background_color);
+
+    // Copy top half (first 144 pixels)
+    for y in 0..ICON_HEIGHT {
+        for x in 0..ICON_WIDTH {
+            let pixel = full_img.get_pixel(x, y);
+            top_img.put_pixel(x, y, *pixel);
+        }
+    }
+
+    // Copy bottom half (last 144 pixels)
+    for y in 0..ICON_HEIGHT {
+        for x in 0..ICON_WIDTH {
+            let pixel = full_img.get_pixel(x, y + ICON_HEIGHT);
+            bottom_img.put_pixel(x, y, *pixel);
+        }
+    }
+
+    (top_img, bottom_img)
 }
 
 /// Draw a filled rectangle
@@ -109,26 +193,55 @@ fn draw_filled_circle(
     }
 }
 
-// Example usage in your Stream Deck plugin
-pub fn get_volume_bar_base64(volume_percent: f32) -> Result<String> {
+/// Get base64 encoded volume bar images for 2 vertical Stream Deck icons
+/// Returns (top_image_base64, bottom_image_base64)
+pub fn get_volume_bar_base64_split(volume_percent: f32) -> Result<(String, String)> {
     let background = Rgb([30, 30, 30]);
-    let img = generate_volume_bar(volume_percent, background);
+    let (top_img, bottom_img) = generate_volume_bar_split(volume_percent, background);
 
-    // Create a buffer to write PNG data to
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
+    // Encode top image
+    let mut top_buffer = Vec::new();
+    let mut top_cursor = Cursor::new(&mut top_buffer);
+    top_img.write_to(&mut top_cursor, image::ImageFormat::Png)?;
+    let top_base64 = general_purpose::STANDARD.encode(&top_buffer);
 
-    // Encode as PNG
-    img.write_to(&mut cursor, image::ImageFormat::Png)?;
+    // Encode bottom image
+    let mut bottom_buffer = Vec::new();
+    let mut bottom_cursor = Cursor::new(&mut bottom_buffer);
+    bottom_img.write_to(&mut bottom_cursor, image::ImageFormat::Png)?;
+    let bottom_base64 = general_purpose::STANDARD.encode(&bottom_buffer);
 
-    // Convert to base64
-    let base64_string = general_purpose::STANDARD.encode(&buffer);
-
-    Ok(base64_string)
+    Ok((top_base64, bottom_base64))
 }
 
-// Alternative: Get data URI format (ready to use in HTML/CSS)
-pub fn get_volume_bar_data_uri(volume_percent: f32) -> Result<String> {
-    let base64 = get_volume_bar_base64(volume_percent)?;
-    Ok(format!("data:image/png;base64,{}", base64))
+/// Get data URI format for split volume bar images spanning 2 vertical Stream Deck icons
+/// Returns (top_image_data_uri, bottom_image_data_uri)
+pub fn get_volume_bar_data_uri_split(volume_percent: f32, position: BarPosition) -> Result<String> {
+    let mut key = generate_cache_key(volume_percent, BarPosition::Upper);
+    let cached_upper = get_cached_value_safe(&key);
+
+    if let Ok(Some(val_cached_upper)) = cached_upper {
+        match position {
+            BarPosition::Upper => return Ok(val_cached_upper),
+            BarPosition::Lower => {
+                key = generate_cache_key(volume_percent, BarPosition::Lower);
+                let cached_lower = get_cached_value_safe(&key);
+
+                return Ok(cached_lower.unwrap().unwrap());
+            }
+        }
+    }
+
+    let (top_base64, bottom_base64) = get_volume_bar_base64_split(volume_percent)?;
+    let top_data_uri = format!("data:image/png;base64,{}", top_base64);
+    let bottom_data_uri = format!("data:image/png;base64,{}", bottom_base64);
+
+    set_cached_value(key, top_data_uri.clone());
+    key = generate_cache_key(volume_percent, BarPosition::Lower);
+    set_cached_value(key, bottom_data_uri.clone());
+
+    match position {
+        BarPosition::Upper => Ok(top_data_uri.clone()),
+        BarPosition::Lower => Ok(bottom_data_uri.clone()),
+    }
 }

@@ -1,7 +1,14 @@
-use crate::{audio, gfx, switch_profile, utils};
+use crate::{
+    audio,
+    gfx::{self, BarPosition},
+    switch_profile, utils,
+};
 use openaction::*;
 
 pub struct ActionEventHandler {}
+
+const VOLUME_INCREMENT: f32 = 0.1;
+const VOLUME_INCREMENT_PERCENTAGE: f32 = VOLUME_INCREMENT * 100.0;
 
 impl openaction::ActionEventHandler for ActionEventHandler {
     async fn will_appear(
@@ -36,26 +43,22 @@ impl openaction::ActionEventHandler for ActionEventHandler {
             }
             1 => {
                 column.volume_up_context = event.context.clone();
-                let img = gfx::get_volume_bar_data_uri(30.0)?;
+                let img = gfx::get_volume_bar_data_uri_split(
+                    column.volume_percentage,
+                    BarPosition::Upper,
+                )?;
                 outbound
                     .set_image(column.volume_up_context.clone(), Some(img), Some(0))
-                    .await?;
-                outbound
-                    .set_title(
-                        column.volume_up_context.clone(),
-                        Some("+".to_string()),
-                        Some(0),
-                    )
                     .await?;
             }
             2 => {
                 column.volume_down_context = event.context.clone();
+                let img = gfx::get_volume_bar_data_uri_split(
+                    column.volume_percentage,
+                    BarPosition::Lower,
+                )?;
                 outbound
-                    .set_title(
-                        column.volume_down_context.clone(),
-                        Some("-".to_string()),
-                        Some(0),
-                    )
+                    .set_image(column.volume_down_context.clone(), Some(img), Some(0))
                     .await?;
             }
             _ => {} // Ignore other rows
@@ -123,22 +126,90 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 let column_key = event.payload.coordinates.column;
 
                 if let Some(column) = columns.get_mut(&column_key) {
-                    let mut audio_system = audio::create_audio_system();
                     match event.payload.coordinates.row {
                         0 => {
                             println!("Muting app {}", column.app_name);
                             column.app_mute = !column.app_mute;
+                            let mut audio_system = audio::create_audio_system();
                             audio_system
                                 .mute_volume(column.app_uid, column.app_mute)
                                 .unwrap();
                         }
                         1 => {
-                            println!("Volume up app {}", column.app_name);
-                            audio_system.increase_volume(column.app_uid, 0.05).unwrap();
+                            let app_uid = column.app_uid;
+                            {
+                                let mut audio_system = audio::create_audio_system();
+                                audio_system
+                                    .increase_volume(app_uid, VOLUME_INCREMENT as f64)
+                                    .unwrap();
+                            }
+                            column.volume_percentage = (column.volume_percentage
+                                + VOLUME_INCREMENT_PERCENTAGE)
+                                .clamp(0.0, 100.0);
+                            let upper_img = gfx::get_volume_bar_data_uri_split(
+                                column.volume_percentage,
+                                BarPosition::Upper,
+                            )?;
+                            let lower_img = gfx::get_volume_bar_data_uri_split(
+                                column.volume_percentage,
+                                BarPosition::Lower,
+                            )?;
+                            outbound
+                                .set_image(
+                                    column.volume_up_context.clone(),
+                                    Some(upper_img),
+                                    Some(0),
+                                )
+                                .await?;
+                            outbound
+                                .set_image(
+                                    column.volume_down_context.clone(),
+                                    Some(lower_img),
+                                    Some(0),
+                                )
+                                .await?;
+                            println!(
+                                "Volume up app {} {}",
+                                column.app_name, column.volume_percentage
+                            );
                         }
                         2 => {
-                            println!("Volume down app {}", column.app_name);
-                            audio_system.decrease_volume(column.app_uid, 0.05).unwrap();
+                            let app_uid = column.app_uid;
+                            {
+                                let mut audio_system = audio::create_audio_system();
+                                audio_system
+                                    .decrease_volume(app_uid, VOLUME_INCREMENT as f64)
+                                    .unwrap();
+                            }
+                            column.volume_percentage = (column.volume_percentage
+                                - VOLUME_INCREMENT_PERCENTAGE)
+                                .clamp(0.0, 100.0);
+                            let upper_img = gfx::get_volume_bar_data_uri_split(
+                                column.volume_percentage,
+                                BarPosition::Upper,
+                            )?;
+                            let lower_img = gfx::get_volume_bar_data_uri_split(
+                                column.volume_percentage,
+                                BarPosition::Lower,
+                            )?;
+                            outbound
+                                .set_image(
+                                    column.volume_up_context.clone(),
+                                    Some(upper_img),
+                                    Some(0),
+                                )
+                                .await?;
+                            outbound
+                                .set_image(
+                                    column.volume_down_context.clone(),
+                                    Some(lower_img),
+                                    Some(0),
+                                )
+                                .await?;
+                            println!(
+                                "Volume down app {} {}",
+                                column.app_name, column.volume_percentage
+                            );
                         }
                         _ => {}
                     }

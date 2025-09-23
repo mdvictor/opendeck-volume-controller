@@ -1,5 +1,6 @@
 use super::traits::{AppInfo, AudioSystem};
 use crate::utils::get_application_name;
+use libpulse_binding::volume::ChannelVolumes;
 use pulsectl::controllers::{AppControl, SinkController};
 use std::error::Error;
 
@@ -24,6 +25,7 @@ impl AudioSystem for PulseAudioSystem {
                 uid: app.index,
                 name: get_application_name(&app),
                 mute: app.mute,
+                volume_percentage: get_pulse_app_volume_percentage(&app.volume),
             })
             .collect();
 
@@ -46,4 +48,22 @@ impl AudioSystem for PulseAudioSystem {
         self.controller.set_app_mute(app_index, mute)?;
         Ok(())
     }
+}
+
+fn get_pulse_app_volume_percentage(channel_volumes: &ChannelVolumes) -> f32 {
+    const PA_VOLUME_NORM: u32 = 65536; // 100% in PulseAudio
+    let channel_count = channel_volumes.len();
+
+    if channel_count == 0 {
+        return 0.0;
+    }
+
+    // Get average of all channels
+    let total_volume: u32 = (0..channel_count)
+        .map(|i| channel_volumes.get()[i as usize].0) // Extract the inner value from Volume(x)
+        .sum();
+
+    let avg_volume = total_volume as f32 / channel_count as f32;
+    let perc = (avg_volume / PA_VOLUME_NORM as f32) * 100.0;
+    perc.min(100.0)
 }

@@ -5,6 +5,7 @@ pub struct AppInfo {
     pub uid: u32,
     pub name: String,
     pub mute: bool,
+    pub volume_percentage: f32,
 }
 
 pub trait AudioSystem {

@@ -12,6 +12,7 @@ pub struct VolumeApplicationColumn {
     pub app_uid: u32,
     pub app_name: String,
     pub app_mute: bool,
+    pub volume_percentage: f32,
 }
 
 pub static VOLUME_APPLICATION_COLUMNS: LazyLock<Mutex<HashMap<u8, VolumeApplicationColumn>>> =
@@ -66,6 +67,7 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
                 app_uid: app.uid,
                 app_name: app.name.clone(),
                 app_mute: app.mute,
+                volume_percentage: app.volume_percentage,
             },
         );
 
