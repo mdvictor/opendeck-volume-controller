@@ -1,4 +1,4 @@
-use crate::pulse_monitor;
+use crate::audio::pulse_monitor;
 
 pub struct GlobalEventHandler {}
 
@@ -10,7 +10,6 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
     ) -> impl std::future::Future<Output = openaction::EventHandlerResult> + Send {
         async move {
             println!("Stream Deck connected - starting PulseAudio monitoring");
-            // Start PulseAudio monitoring
             pulse_monitor::start_pulse_monitoring();
             Ok(())
         }

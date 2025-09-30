@@ -3,7 +3,6 @@ use openaction::*;
 mod audio;
 mod event_handlers;
 mod gfx;
-mod pulse_monitor;
 mod switch_profile;
 mod utils;
 

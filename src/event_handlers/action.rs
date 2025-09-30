@@ -7,6 +7,7 @@ use openaction::*;
 
 pub struct ActionEventHandler {}
 
+// this could be a plugin setting
 const VOLUME_INCREMENT: f32 = 0.1;
 const VOLUME_INCREMENT_PERCENTAGE: f32 = VOLUME_INCREMENT * 100.0;
 
@@ -125,93 +126,100 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 let mut columns = utils::VOLUME_APPLICATION_COLUMNS.lock().await;
                 let column_key = event.payload.coordinates.column;
 
-                if let Some(column) = columns.get_mut(&column_key) {
-                    match event.payload.coordinates.row {
-                        0 => {
-                            println!("Muting app {}", column.app_name);
-                            column.app_mute = !column.app_mute;
-                            let mut audio_system = audio::create_audio_system();
-                            audio_system
-                                .mute_volume(column.app_uid, column.app_mute)
-                                .unwrap();
-                        }
-                        1 => {
-                            let app_uid = column.app_uid;
-                            {
+                'matcher: {
+                    if let Some(column) = columns.get_mut(&column_key) {
+                        match event.payload.coordinates.row {
+                            0 => {
+                                println!("Muting app {}", column.app_name);
+                                column.app_mute = !column.app_mute;
                                 let mut audio_system = audio::create_audio_system();
                                 audio_system
-                                    .increase_volume(app_uid, VOLUME_INCREMENT as f64)
+                                    .mute_volume(column.app_uid, column.app_mute)
                                     .unwrap();
                             }
-                            column.volume_percentage = (column.volume_percentage
-                                + VOLUME_INCREMENT_PERCENTAGE)
-                                .clamp(0.0, 100.0);
-                            let upper_img = gfx::get_volume_bar_data_uri_split(
-                                column.volume_percentage,
-                                BarPosition::Upper,
-                            )?;
-                            let lower_img = gfx::get_volume_bar_data_uri_split(
-                                column.volume_percentage,
-                                BarPosition::Lower,
-                            )?;
-                            outbound
-                                .set_image(
-                                    column.volume_up_context.clone(),
-                                    Some(upper_img),
-                                    Some(0),
-                                )
-                                .await?;
-                            outbound
-                                .set_image(
-                                    column.volume_down_context.clone(),
-                                    Some(lower_img),
-                                    Some(0),
-                                )
-                                .await?;
-                            println!(
-                                "Volume up app {} {}",
-                                column.app_name, column.volume_percentage
-                            );
-                        }
-                        2 => {
-                            let app_uid = column.app_uid;
-                            {
-                                let mut audio_system = audio::create_audio_system();
-                                audio_system
-                                    .decrease_volume(app_uid, VOLUME_INCREMENT as f64)
-                                    .unwrap();
+                            1 => {
+                                let app_uid = column.app_uid;
+
+                                if column.volume_percentage >= 100.0 {
+                                    break 'matcher;
+                                }
+
+                                {
+                                    let mut audio_system = audio::create_audio_system();
+                                    audio_system
+                                        .increase_volume(app_uid, VOLUME_INCREMENT as f64)
+                                        .unwrap();
+                                }
+                                column.volume_percentage = (column.volume_percentage
+                                    + VOLUME_INCREMENT_PERCENTAGE)
+                                    .clamp(0.0, 100.0);
+                                let upper_img = gfx::get_volume_bar_data_uri_split(
+                                    column.volume_percentage,
+                                    BarPosition::Upper,
+                                )?;
+                                let lower_img = gfx::get_volume_bar_data_uri_split(
+                                    column.volume_percentage,
+                                    BarPosition::Lower,
+                                )?;
+                                outbound
+                                    .set_image(
+                                        column.volume_up_context.clone(),
+                                        Some(upper_img),
+                                        Some(0),
+                                    )
+                                    .await?;
+                                outbound
+                                    .set_image(
+                                        column.volume_down_context.clone(),
+                                        Some(lower_img),
+                                        Some(0),
+                                    )
+                                    .await?;
+                                println!(
+                                    "Volume up app {} {}",
+                                    column.app_name, column.volume_percentage
+                                );
                             }
-                            column.volume_percentage = (column.volume_percentage
-                                - VOLUME_INCREMENT_PERCENTAGE)
-                                .clamp(0.0, 100.0);
-                            let upper_img = gfx::get_volume_bar_data_uri_split(
-                                column.volume_percentage,
-                                BarPosition::Upper,
-                            )?;
-                            let lower_img = gfx::get_volume_bar_data_uri_split(
-                                column.volume_percentage,
-                                BarPosition::Lower,
-                            )?;
-                            outbound
-                                .set_image(
-                                    column.volume_up_context.clone(),
-                                    Some(upper_img),
-                                    Some(0),
-                                )
-                                .await?;
-                            outbound
-                                .set_image(
-                                    column.volume_down_context.clone(),
-                                    Some(lower_img),
-                                    Some(0),
-                                )
-                                .await?;
-                            println!(
-                                "Volume down app {} {}",
-                                column.app_name, column.volume_percentage
-                            );
+                            2 => {
+                                let app_uid = column.app_uid;
+                                {
+                                    let mut audio_system = audio::create_audio_system();
+                                    audio_system
+                                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64)
+                                        .unwrap();
+                                }
+                                column.volume_percentage = (column.volume_percentage
+                                    - VOLUME_INCREMENT_PERCENTAGE)
+                                    .clamp(0.0, 100.0);
+                                let upper_img = gfx::get_volume_bar_data_uri_split(
+                                    column.volume_percentage,
+                                    BarPosition::Upper,
+                                )?;
+                                let lower_img = gfx::get_volume_bar_data_uri_split(
+                                    column.volume_percentage,
+                                    BarPosition::Lower,
+                                )?;
+                                outbound
+                                    .set_image(
+                                        column.volume_up_context.clone(),
+                                        Some(upper_img),
+                                        Some(0),
+                                    )
+                                    .await?;
+                                outbound
+                                    .set_image(
+                                        column.volume_down_context.clone(),
+                                        Some(lower_img),
+                                        Some(0),
+                                    )
+                                    .await?;
+                                println!(
+                                    "Volume down app {} {}",
+                                    column.app_name, column.volume_percentage
+                                );
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
 

@@ -1,4 +1,5 @@
 pub mod pulse;
+pub mod pulse_monitor;
 pub mod traits;
 
 // Re-export the important stuff
