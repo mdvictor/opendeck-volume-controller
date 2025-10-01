@@ -1,12 +1,29 @@
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose};
-use image::{ImageBuffer, Rgb, RgbImage};
+use image::{ImageBuffer, Rgb, RgbImage, Rgba, RgbaImage};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Cursor;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 static VOLUME_BAR_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+pub static TRANSPARENT_ICON: LazyLock<String> = LazyLock::new(|| {
+    const ICON_SIZE: u32 = 144;
+
+    // Create a transparent RGBA image
+    let img = RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, Rgba([0, 0, 0, 0]));
+
+    // Encode to PNG
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    img.write_to(&mut cursor, image::ImageFormat::Png)
+        .expect("Failed to encode transparent icon");
+
+    // Convert to base64 and return as data URI
+    let base64 = general_purpose::STANDARD.encode(&buffer);
+    format!("data:image/png;base64,{}", base64)
+});
 
 #[derive(Debug)]
 pub enum BarPosition {
@@ -216,32 +233,26 @@ pub fn get_volume_bar_base64_split(volume_percent: f32) -> Result<(String, Strin
 
 /// Get data URI format for split volume bar images spanning 2 vertical Stream Deck icons
 /// Returns (top_image_data_uri, bottom_image_data_uri)
-pub fn get_volume_bar_data_uri_split(volume_percent: f32, position: BarPosition) -> Result<String> {
-    let mut key = generate_cache_key(volume_percent, BarPosition::Upper);
-    let cached_upper = get_cached_value_safe(&key);
+pub fn get_volume_bar_data_uri_split(volume_percent: f32) -> Result<(String, String)> {
+    // Check cache for both images
+    let upper_key = generate_cache_key(volume_percent, BarPosition::Upper);
+    let lower_key = generate_cache_key(volume_percent, BarPosition::Lower);
 
-    if let Ok(Some(val_cached_upper)) = cached_upper {
-        match position {
-            BarPosition::Upper => return Ok(val_cached_upper),
-            BarPosition::Lower => {
-                key = generate_cache_key(volume_percent, BarPosition::Lower);
-                let cached_lower = get_cached_value_safe(&key);
-
-                return Ok(cached_lower.unwrap().unwrap());
-            }
-        }
+    if let (Ok(Some(cached_upper)), Ok(Some(cached_lower))) = (
+        get_cached_value_safe(&upper_key),
+        get_cached_value_safe(&lower_key),
+    ) {
+        return Ok((cached_upper, cached_lower));
     }
 
+    // Generate both images
     let (top_base64, bottom_base64) = get_volume_bar_base64_split(volume_percent)?;
     let top_data_uri = format!("data:image/png;base64,{}", top_base64);
     let bottom_data_uri = format!("data:image/png;base64,{}", bottom_base64);
 
-    set_cached_value(key, top_data_uri.clone());
-    key = generate_cache_key(volume_percent, BarPosition::Lower);
-    set_cached_value(key, bottom_data_uri.clone());
+    // Cache both images
+    let _ = set_cached_value(upper_key, top_data_uri.clone());
+    let _ = set_cached_value(lower_key, bottom_data_uri.clone());
 
-    match position {
-        BarPosition::Upper => Ok(top_data_uri.clone()),
-        BarPosition::Lower => Ok(bottom_data_uri.clone()),
-    }
+    Ok((top_data_uri, bottom_data_uri))
 }

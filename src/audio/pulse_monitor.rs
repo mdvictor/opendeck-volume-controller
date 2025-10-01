@@ -1,4 +1,4 @@
-use crate::{audio, switch_profile, utils};
+use crate::{audio, utils};
 use libpulse_binding::{
     context::{
         Context, FlagSet,
@@ -7,7 +7,6 @@ use libpulse_binding::{
     mainloop::threaded::Mainloop,
     proplist::Proplist,
 };
-use openaction::OUTBOUND_EVENT_MANAGER;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
@@ -128,27 +127,16 @@ fn start_refresh_processor() {
         tokio::spawn(async move {
             while receiver.recv().await.is_some() {
                 println!("Processing refresh request...");
-
-                let mut outbound_lock = OUTBOUND_EVENT_MANAGER.lock().await;
-                if let Some(ref mut outbound) = *outbound_lock {
-                    match refresh_audio_applications(outbound).await {
-                        Ok(_) => println!("Audio applications refreshed successfully"),
-                        Err(e) => eprintln!("Failed to refresh audio applications: {:?}", e),
-                    }
-                } else {
-                    eprintln!("OUTBOUND_EVENT_MANAGER not available");
+                match refresh_audio_applications().await {
+                    Ok(_) => println!("Audio applications refreshed successfully"),
+                    Err(e) => eprintln!("Failed to refresh audio applications: {:?}", e),
                 }
             }
         });
     }
 }
 
-async fn refresh_audio_applications(
-    outbound: &mut openaction::OutboundEventManager,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Clear the screen first
-    utils::clear_screen(outbound).await?;
-
+async fn refresh_audio_applications() -> Result<(), Box<dyn std::error::Error>> {
     // Get current applications (same logic as manual-detection)
     let applications = {
         let mut audio_system = audio::create_audio_system();
@@ -157,11 +145,9 @@ async fn refresh_audio_applications(
             .map_err(|e| format!("Error fetching applications: {:?}", e))?
     };
 
-    // Create new columns
-    utils::create_application_volume_columns(applications).await;
-
-    // Switch to Sound profile
-    switch_profile::run(outbound, "Sound".to_string()).await?;
+    // Update columns and Stream Deck buttons
+    utils::update_application_volume_columns(applications).await;
+    utils::update_stream_deck_buttons().await;
 
     Ok(())
 }

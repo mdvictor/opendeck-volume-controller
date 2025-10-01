@@ -1,15 +1,12 @@
-use openaction::*;
+use openaction::OpenActionResult;
 
 mod audio;
-mod event_handlers;
 mod gfx;
-mod switch_profile;
+mod plugin;
 mod utils;
 
-use event_handlers::{ActionEventHandler, GlobalEventHandler};
-
 #[tokio::main]
-async fn main() {
+async fn main() -> OpenActionResult<()> {
     simplelog::TermLogger::init(
         simplelog::LevelFilter::Debug,
         simplelog::Config::default(),
@@ -20,7 +17,5 @@ async fn main() {
 
     println!("Starting Volume Controller plugin...");
 
-    if let Err(error) = init_plugin(GlobalEventHandler {}, ActionEventHandler {}).await {
-        log::error!("Failed to init plugin: {}", error);
-    }
+    plugin::init().await
 }
