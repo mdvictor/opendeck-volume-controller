@@ -6,6 +6,7 @@ pub struct AppInfo {
     pub name: String,
     pub mute: bool,
     pub volume_percentage: f32,
+    pub icon_name: Option<String>,
 }
 
 pub trait AudioSystem {

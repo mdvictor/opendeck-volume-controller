@@ -19,6 +19,7 @@ impl PulseAudioSystem {
 impl AudioSystem for PulseAudioSystem {
     fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>> {
         let apps = self.controller.list_applications()?;
+        println!("APPS: {:?}", apps);
         let res: Vec<AppInfo> = apps
             .into_iter()
             .map(|app| AppInfo {
@@ -26,6 +27,7 @@ impl AudioSystem for PulseAudioSystem {
                 name: get_application_name(&app),
                 mute: app.mute,
                 volume_percentage: get_pulse_app_volume_percentage(&app.volume),
+                icon_name: app.proplist.get_str("application.icon_name"),
             })
             .collect();
 
@@ -51,7 +53,7 @@ impl AudioSystem for PulseAudioSystem {
 }
 
 fn get_pulse_app_volume_percentage(channel_volumes: &ChannelVolumes) -> f32 {
-    const PA_VOLUME_NORM: u32 = 65536; // 100% in PulseAudio
+    const PA_VOLUME_NORM: u32 = 98304; // 100% in PulseAudio
     let channel_count = channel_volumes.len();
 
     if channel_count == 0 {

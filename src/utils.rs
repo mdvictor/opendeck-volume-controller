@@ -3,6 +3,7 @@ use pulsectl::controllers::types::ApplicationInfo;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
+use tux_icons::icon_fetcher::IconFetcher;
 
 use crate::gfx::TRANSPARENT_ICON;
 use crate::plugin::VCAction;
@@ -16,6 +17,8 @@ pub struct VolumeApplicationColumn {
     pub name: String,
     pub mute: bool,
     pub vol_percent: f32,
+    pub icon_uri: String,
+    pub uses_default_icon: bool,
 }
 
 // this should probably be a setting
@@ -34,10 +37,9 @@ pub static VOLUME_APPLICATION_COLUMNS: LazyLock<Mutex<HashMap<u8, VolumeApplicat
 pub async fn create_application_volume_columns(applications: Vec<crate::audio::traits::AppInfo>) {
     let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
 
-    println!("THERE ARE {} SOUND APPS", applications.len());
     let mut col_key = STARTING_COL_KEY;
     for app in applications {
-        println!("DEBUG APP: {:?}", app);
+        let (icon_uri, uses_default_icon) = get_app_icon_uri(app.icon_name, app.name.clone());
         columns.insert(
             col_key,
             VolumeApplicationColumn {
@@ -48,13 +50,13 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
                 name: app.name.clone(),
                 mute: app.mute,
                 vol_percent: app.volume_percentage,
+                icon_uri,
+                uses_default_icon,
             },
         );
 
         col_key += 1;
     }
-
-    println!("I AM DONE COLUMNING: {:?}", columns);
 }
 
 pub async fn update_application_volume_columns(applications: Vec<crate::audio::traits::AppInfo>) {
@@ -70,6 +72,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
             column.mute = app.mute;
             column.vol_percent = app.volume_percentage;
         } else {
+            let (icon_uri, uses_default_icon) = get_app_icon_uri(app.icon_name, app.name.clone());
             // Insert new column if it doesn't exist
             columns.insert(
                 col_key,
@@ -81,6 +84,8 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
                     name: app.name.clone(),
                     mute: app.mute,
                     vol_percent: app.volume_percentage,
+                    icon_uri,
+                    uses_default_icon,
                 },
             );
         }
@@ -180,8 +185,7 @@ pub fn get_application_name(app: &ApplicationInfo) -> String {
 async fn update_sd3x5_btns(column: &VolumeApplicationColumn, instance: &Instance) {
     match instance.coordinates.row {
         0 => {
-            // Update header with app name
-            let _ = instance.set_title(Some(column.name.clone()), None).await;
+            update_header(instance, column).await;
         }
         1 | 2 => {
             // Update volume buttons with bar graphics
@@ -206,6 +210,16 @@ async fn cleanup_sd3x5_column(instance: &Instance) {
         .await;
 }
 
+pub async fn update_header(instance: &Instance, column: &VolumeApplicationColumn) {
+    let _ = instance
+        .set_image(Some(column.icon_uri.clone()), None)
+        .await;
+
+    if column.uses_default_icon {
+        let _ = instance.set_title(Some(column.name.clone()), None).await;
+    }
+}
+
 fn is_generic_name(name: &str) -> bool {
     let generic_names = [
         "Playback",
@@ -219,4 +233,57 @@ fn is_generic_name(name: &str) -> bool {
     ];
 
     generic_names.contains(&name) || name.trim().is_empty()
+}
+
+/// Get application icon as a base64 data URI
+/// If icon_name is None, returns the default wave-sound.png icon
+/// Otherwise, attempts to find and encode the system icon for the given icon name
+pub fn get_app_icon_uri(icon_name: Option<String>, fallback_icon_name: String) -> (String, bool) {
+    use base64::{Engine as _, engine::general_purpose};
+    use std::path::PathBuf;
+
+    let fetcher = IconFetcher::new();
+    let mut uses_default_icon = false;
+
+    let icon_path = if let Some(name) = icon_name {
+        // Try primary icon name
+        fetcher
+            .get_icon_path(name)
+            .or_else(|| {
+                // Try fallback icon name
+                fetcher.get_icon_path(fallback_icon_name.clone())
+            })
+            .unwrap_or_else(|| {
+                // Use default
+                PathBuf::from("imgs/wave-sound.png")
+            })
+    } else {
+        // Try fallback icon name
+        fetcher
+            .get_icon_path(fallback_icon_name)
+            .unwrap_or_else(|| {
+                // Use default
+                uses_default_icon = true;
+                PathBuf::from("imgs/wave-sound.png")
+            })
+    };
+
+    // Read the file
+    let image_data = std::fs::read(&icon_path).expect("Failed to read icon file");
+
+    // Determine MIME type based on extension
+    let mime_type = match icon_path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("xpm") => "image/x-xpm",
+        _ => "image/png",
+    };
+
+    // Base64 encode
+    let base64_data = general_purpose::STANDARD.encode(&image_data);
+
+    (
+        format!("data:{};base64,{}", mime_type, base64_data),
+        uses_default_icon,
+    )
 }

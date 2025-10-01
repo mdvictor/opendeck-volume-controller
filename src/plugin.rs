@@ -5,7 +5,7 @@ use openaction::*;
 use crate::{
     audio::{self, *},
     gfx::{self, TRANSPARENT_ICON},
-    utils,
+    utils::{self, update_header},
 };
 
 // this could be a plugin setting
@@ -46,7 +46,7 @@ impl Action for VCAction {
 
         match instance.coordinates.row {
             0 => {
-                instance.set_title(Some(column.name.clone()), None).await?;
+                update_header(instance, column).await;
                 column.header_id = Some(instance.instance_id.clone());
             }
             1 | 2 => {
