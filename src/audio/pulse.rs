@@ -1,5 +1,4 @@
 use super::traits::{AppInfo, AudioSystem};
-use crate::utils::get_application_name;
 use libpulse_binding::volume::ChannelVolumes;
 use pulsectl::controllers::{AppControl, SinkController};
 use std::error::Error;
@@ -24,7 +23,11 @@ impl AudioSystem for PulseAudioSystem {
             .into_iter()
             .map(|app| AppInfo {
                 uid: app.index,
-                name: get_application_name(&app),
+                name: app
+                    .proplist
+                    .get_str("application.name")
+                    .unwrap_or("app_stream".to_string())
+                    .to_lowercase(),
                 mute: app.mute,
                 volume_percentage: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
