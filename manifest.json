@@ -1,0 +1,20 @@
+{
+  "Name": "Volume Controller",
+  "Author": "Victor Marin",
+  "Version": "1.0.0",
+  "CodePathLin": "volumeController",
+  "OS": [{ "Platform": "linux" }],
+  "Category": "Volume Controller",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "Description": "Linux volume controller",
+  "Icon": "imgs/marketplace",
+  "Actions": [
+    {
+      "Icon": "imgs/auto",
+      "Name": "Volume Control Auto Grid",
+      "UUID": "com.victormarin.volume-controller.auto-detection.volctrl",
+      "Tooltip": "Volume controller grid part, fill your SD with this",
+      "States": [{}]
+    }
+  ]
+}

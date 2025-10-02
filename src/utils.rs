@@ -113,6 +113,13 @@ pub fn get_app_icon_uri(
     (normal_uri, muted_uri, uses_default_icon)
 }
 
+pub async fn cleanup_sd3x5_column(instance: &Instance) {
+    let _ = instance.set_title(Some(""), None).await;
+    let _ = instance
+        .set_image(Some(TRANSPARENT_ICON.as_str()), None)
+        .await;
+}
+
 /// Add a grayscale CSS filter to an SVG
 fn add_grayscale_filter_to_svg(svg: String) -> String {
     // Check if the SVG already has a <defs> section
@@ -153,11 +160,4 @@ async fn update_sd3x5_btns(channel: &MixerChannel, instance: &Instance) {
         }
         _ => {}
     }
-}
-
-async fn cleanup_sd3x5_column(instance: &Instance) {
-    let _ = instance.set_title(Some(""), None).await;
-    let _ = instance
-        .set_image(Some(TRANSPARENT_ICON.as_str()), None)
-        .await;
 }

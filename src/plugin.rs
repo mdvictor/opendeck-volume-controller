@@ -6,7 +6,7 @@ use crate::{
     audio::{self, *},
     gfx::{self, TRANSPARENT_ICON},
     mixer,
-    utils::update_header,
+    utils::{self, update_header},
 };
 
 // this could be a plugin setting
@@ -15,7 +15,7 @@ const VOLUME_INCREMENT: f32 = 0.1;
 pub struct VolumeControllerAction;
 #[async_trait]
 impl Action for VolumeControllerAction {
-    const UUID: ActionUuid = "com.victormarin.volume-controller.auto-detection.blank";
+    const UUID: ActionUuid = "com.victormarin.volume-controller.auto-detection.volctrl";
     type Settings = HashMap<String, String>;
 
     async fn will_disappear(
@@ -35,12 +35,16 @@ impl Action for VolumeControllerAction {
 
         // Skip column 0 as it's reserved TODO make this a setting?
         if column_key == 0 {
+            utils::cleanup_sd3x5_column(instance).await;
             return Ok(());
         }
 
         let channel = match channels.get_mut(&column_key) {
             Some(ch) => ch,
-            None => return Ok(()),
+            None => {
+                utils::cleanup_sd3x5_column(instance).await;
+                return Ok(());
+            }
         };
 
         match instance.coordinates.row {

@@ -1,0 +1,20 @@
+[package]
+name = "opendeck-volume-controller"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pulsectl-rs = "0.3"
+openaction = "2.1"
+tokio = { version = "1.45", features = ["full"] }
+log = "0.4"
+simplelog = "0.12"
+serde = "1.0"
+serde_json = "1.0"
+lazy_static = "1.5"
+async-trait = "0.1"
+libpulse-binding = "2.30"
+anyhow = "1.0"
+image = "0.24"
+base64 = "0.22"
+tux-icons = "0.4.4"
