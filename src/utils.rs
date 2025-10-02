@@ -1,178 +1,43 @@
 use openaction::{Action, Instance, visible_instances};
-use std::collections::HashMap;
-use std::sync::LazyLock;
-use tokio::sync::Mutex;
 use tux_icons::icon_fetcher::IconFetcher;
 
 use crate::gfx::TRANSPARENT_ICON;
+use crate::mixer::{self, MixerChannel};
 use crate::plugin::VolumeControllerAction;
 
-#[derive(Clone, Debug)]
-pub struct VolumeApplicationColumn {
-    pub header_id: Option<String>,
-    pub upper_vol_btn_id: Option<String>,
-    pub lower_vol_btn_id: Option<String>,
-    pub uid: u32,
-    pub name: String,
-    pub mute: bool,
-    pub vol_percent: f32,
-    pub icon_uri: String,
-    pub icon_uri_mute: String,
-    pub uses_default_icon: bool,
-    pub is_device: bool,
-}
-
-// this should probably be a setting
-// currently the volume controller will expect the SD volume apps
-// to start on the second column, while the first one would be reserved
-// for other actions (e.g.: the cancel btn that would take you back to
-// your initial profile)
-// but I reckon this is rather limiting? maybe you want all btns to be
-// apps, but then you have no way to exit the controller through the SD?
-// TODO
-const STARTING_COL_KEY: u8 = 1;
-
-pub static VOLUME_APPLICATION_COLUMNS: LazyLock<Mutex<HashMap<u8, VolumeApplicationColumn>>> =
-    LazyLock::new(|| Mutex::const_new(HashMap::new()));
-
-pub async fn create_application_volume_columns(
-    applications: Vec<crate::audio::audio_system::AppInfo>,
-) {
-    let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
-
-    let mut col_key = STARTING_COL_KEY;
-    for app in applications {
-        let (icon_uri, icon_uri_mute, uses_default_icon) =
-            get_app_icon_uri(app.icon_name, app.name.clone());
-        columns.insert(
-            col_key,
-            VolumeApplicationColumn {
-                header_id: None,
-                upper_vol_btn_id: None,
-                lower_vol_btn_id: None,
-                uid: app.uid,
-                name: app.name.clone(),
-                mute: app.mute,
-                vol_percent: app.volume_percentage,
-                icon_uri,
-                icon_uri_mute,
-                uses_default_icon,
-                is_device: app.is_device,
-            },
-        );
-
-        col_key += 1;
-    }
-}
-
-pub async fn update_application_volume_columns(
-    applications: Vec<crate::audio::audio_system::AppInfo>,
-) {
-    let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
-
-    let mut col_key = STARTING_COL_KEY;
-    for app in applications {
-        if let Some(column) = columns.get_mut(&col_key) {
-            // Update the column data
-            column.uid = app.uid;
-            column.name = app.name.clone();
-            column.mute = app.mute;
-            column.vol_percent = app.volume_percentage;
-            column.is_device = app.is_device;
-        } else {
-            let (icon_uri, icon_uri_mute, uses_default_icon) =
-                get_app_icon_uri(app.icon_name, app.name.clone());
-            // Insert new column if it doesn't exist
-            columns.insert(
-                col_key,
-                VolumeApplicationColumn {
-                    header_id: None,
-                    upper_vol_btn_id: None,
-                    lower_vol_btn_id: None,
-                    uid: app.uid,
-                    name: app.name.clone(),
-                    mute: app.mute,
-                    vol_percent: app.volume_percentage,
-                    icon_uri,
-                    icon_uri_mute,
-                    uses_default_icon,
-                    is_device: app.is_device,
-                },
-            );
-        }
-        col_key += 1;
-    }
-
-    // Remove columns that no longer have corresponding apps
-    columns.retain(|&key, _| key < col_key);
-
-    println!(
-        "Updated application volume controllers model: {:?}",
-        columns
-    );
-}
-
 pub async fn update_stream_deck_buttons() {
-    let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
+    let mut channels = mixer::MIXER_CHANNELS.lock().await;
 
     for instance in visible_instances(VolumeControllerAction::UUID).await {
-        let Some(column) = columns.get_mut(&instance.coordinates.column) else {
+        let Some(channel) = channels.get_mut(&instance.coordinates.column) else {
             //TODO switch case for type of device eventually
             cleanup_sd3x5_column(&instance).await;
             continue;
         };
 
         match instance.coordinates.row {
-            0 => column.header_id = Some(instance.instance_id.clone()),
-            1 => column.upper_vol_btn_id = Some(instance.instance_id.clone()),
-            2 => column.lower_vol_btn_id = Some(instance.instance_id.clone()),
+            0 => channel.header_id = Some(instance.instance_id.clone()),
+            1 => channel.upper_vol_btn_id = Some(instance.instance_id.clone()),
+            2 => channel.lower_vol_btn_id = Some(instance.instance_id.clone()),
             _ => {}
         }
 
         //TODO switch case for type of device eventually
-        update_sd3x5_btns(column, &instance).await;
+        update_sd3x5_btns(channel, &instance).await;
     }
 }
 
-async fn update_sd3x5_btns(column: &VolumeApplicationColumn, instance: &Instance) {
-    match instance.coordinates.row {
-        0 => {
-            update_header(instance, column).await;
-        }
-        1 | 2 => {
-            // Update volume buttons with bar graphics
-            if let Ok((upper_img, lower_img)) =
-                crate::gfx::get_volume_bar_data_uri_split(column.vol_percent)
-            {
-                if instance.coordinates.row == 1 {
-                    let _ = instance.set_image(Some(upper_img), None).await;
-                } else {
-                    let _ = instance.set_image(Some(lower_img), None).await;
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-async fn cleanup_sd3x5_column(instance: &Instance) {
-    let _ = instance.set_title(Some(""), None).await;
-    let _ = instance
-        .set_image(Some(TRANSPARENT_ICON.as_str()), None)
-        .await;
-}
-
-pub async fn update_header(instance: &Instance, column: &VolumeApplicationColumn) {
-    let icon_uri = if column.mute {
-        column.icon_uri_mute.clone()
+pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
+    let icon_uri = if channel.mute {
+        channel.icon_uri_mute.clone()
     } else {
-        column.icon_uri.clone()
+        channel.icon_uri.clone()
     };
 
     let _ = instance.set_image(Some(icon_uri), None).await;
 
-    if column.uses_default_icon {
-        let _ = instance.set_title(Some(column.name.clone()), None).await;
+    if channel.uses_default_icon {
+        let _ = instance.set_title(Some(channel.name.clone()), None).await;
     }
 }
 
@@ -267,4 +132,32 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
     } else {
         svg
     }
+}
+
+async fn update_sd3x5_btns(channel: &MixerChannel, instance: &Instance) {
+    match instance.coordinates.row {
+        0 => {
+            update_header(instance, channel).await;
+        }
+        1 | 2 => {
+            // Update volume buttons with bar graphics
+            if let Ok((upper_img, lower_img)) =
+                crate::gfx::get_volume_bar_data_uri_split(channel.vol_percent)
+            {
+                if instance.coordinates.row == 1 {
+                    let _ = instance.set_image(Some(upper_img), None).await;
+                } else {
+                    let _ = instance.set_image(Some(lower_img), None).await;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn cleanup_sd3x5_column(instance: &Instance) {
+    let _ = instance.set_title(Some(""), None).await;
+    let _ = instance
+        .set_image(Some(TRANSPARENT_ICON.as_str()), None)
+        .await;
 }

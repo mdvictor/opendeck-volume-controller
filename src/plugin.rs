@@ -5,7 +5,8 @@ use openaction::*;
 use crate::{
     audio::{self, *},
     gfx::{self, TRANSPARENT_ICON},
-    utils::{self, update_header},
+    mixer,
+    utils::update_header,
 };
 
 // this could be a plugin setting
@@ -29,7 +30,7 @@ impl Action for VolumeControllerAction {
     }
 
     async fn will_appear(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
-        let mut columns = utils::VOLUME_APPLICATION_COLUMNS.lock().await;
+        let mut channels = mixer::MIXER_CHANNELS.lock().await;
         let column_key = instance.coordinates.column;
 
         // Skip column 0 as it's reserved TODO make this a setting?
@@ -37,26 +38,26 @@ impl Action for VolumeControllerAction {
             return Ok(());
         }
 
-        let column = match columns.get_mut(&column_key) {
-            Some(col) => col,
+        let channel = match channels.get_mut(&column_key) {
+            Some(ch) => ch,
             None => return Ok(()),
         };
 
         match instance.coordinates.row {
             0 => {
-                update_header(instance, column).await;
-                column.header_id = Some(instance.instance_id.clone());
+                update_header(instance, channel).await;
+                channel.header_id = Some(instance.instance_id.clone());
             }
             1 | 2 => {
                 if let Ok((upper_img, lower_img)) =
-                    gfx::get_volume_bar_data_uri_split(column.vol_percent)
+                    gfx::get_volume_bar_data_uri_split(channel.vol_percent)
                 {
                     let img;
                     if instance.coordinates.row == 1 {
-                        column.upper_vol_btn_id = Some(instance.instance_id.clone());
+                        channel.upper_vol_btn_id = Some(instance.instance_id.clone());
                         img = upper_img;
                     } else {
-                        column.lower_vol_btn_id = Some(instance.instance_id.clone());
+                        channel.lower_vol_btn_id = Some(instance.instance_id.clone());
                         img = lower_img;
                     };
                     instance.set_image(Some(img), None).await?;
@@ -69,42 +70,45 @@ impl Action for VolumeControllerAction {
     }
 
     async fn key_down(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
-        let mut columns = utils::VOLUME_APPLICATION_COLUMNS.lock().await;
+        let mut channels = mixer::MIXER_CHANNELS.lock().await;
         let column_key = instance.coordinates.column;
 
-        if let Some(column) = columns.get_mut(&column_key) {
+        if let Some(channel) = channels.get_mut(&column_key) {
             match instance.coordinates.row {
                 0 => {
-                    column.mute = !column.mute;
-                    let mut audio_system = audio::create_audio_system();
+                    channel.mute = !channel.mute;
+                    let mut audio_system = audio::create();
                     audio_system
-                        .mute_volume(column.uid, column.mute, column.is_device)
+                        .mute_volume(channel.uid, channel.mute, channel.is_device)
                         .expect("Failed to mute");
 
-                    println!("Muting app {}", column.name);
+                    println!("Muting app {}", channel.name);
                 }
                 1 => {
-                    let app_uid = column.uid;
+                    let app_uid = channel.uid;
 
-                    if column.vol_percent >= 100.0 {
+                    if channel.vol_percent >= 100.0 {
                         return Ok(());
                     }
 
-                    let mut audio_system = audio::create_audio_system();
+                    let mut audio_system = audio::create();
                     audio_system
-                        .increase_volume(app_uid, VOLUME_INCREMENT as f64, column.is_device)
+                        .increase_volume(app_uid, VOLUME_INCREMENT as f64, channel.is_device)
                         .expect("Failed to increase volume");
 
-                    println!("Volume up in app {} {}", column.name, column.vol_percent);
+                    println!("Volume up in app {} {}", channel.name, channel.vol_percent);
                 }
                 2 => {
-                    let app_uid = column.uid;
-                    let mut audio_system = audio::create_audio_system();
+                    let app_uid = channel.uid;
+                    let mut audio_system = audio::create();
                     audio_system
-                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64, column.is_device)
+                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64, channel.is_device)
                         .expect("Failed to decrease volume");
 
-                    println!("Volume down in app {} {}", column.name, column.vol_percent);
+                    println!(
+                        "Volume down in app {} {}",
+                        channel.name, channel.vol_percent
+                    );
                 }
                 _ => {}
             }
@@ -121,12 +125,12 @@ pub async fn init() -> OpenActionResult<()> {
 
     // create initial map
     let applications = {
-        let mut audio_system = create_audio_system();
+        let mut audio_system = create();
         audio_system
             .list_applications()
             .expect("Error fetching applications from SinkController")
     };
-    utils::create_application_volume_columns(applications).await;
+    mixer::create_mixer_channels(applications).await;
 
     register_action(VolumeControllerAction).await;
 

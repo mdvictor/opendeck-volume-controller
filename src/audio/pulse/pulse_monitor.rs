@@ -1,4 +1,4 @@
-use crate::{audio, utils};
+use crate::{audio, mixer, utils};
 use libpulse_binding::{
     context::{
         Context, FlagSet,
@@ -150,14 +150,14 @@ fn start_refresh_processor() {
 async fn refresh_audio_applications() -> Result<(), Box<dyn std::error::Error>> {
     // Get current applications (same logic as manual-detection)
     let applications = {
-        let mut audio_system = audio::create_audio_system();
+        let mut audio_system = audio::create();
         audio_system
             .list_applications()
             .map_err(|e| format!("Error fetching applications: {:?}", e))?
     };
 
-    // Update columns and Stream Deck buttons
-    utils::update_application_volume_columns(applications).await;
+    // Update mixers and Stream Deck buttons
+    mixer::update_mixer_channels(applications).await;
     utils::update_stream_deck_buttons().await;
 
     Ok(())
