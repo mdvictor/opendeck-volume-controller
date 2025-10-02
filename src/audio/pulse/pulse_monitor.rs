@@ -83,6 +83,10 @@ pub fn start_pulse_monitoring() {
                     println!("Audio application volume/mute changed");
                     let _ = refresh_sender.send(());
                 }
+                (Some(Facility::Sink), Some(Operation::Changed)) => {
+                    println!("System sink (main PC audio) volume/mute changed");
+                    let _ = refresh_sender.send(());
+                }
                 _ => {}
             }
         })));
@@ -111,8 +115,11 @@ pub fn start_pulse_monitoring() {
             }
         }
 
-        // Subscribe to sink input events
-        context.subscribe(InterestMaskSet::SINK_INPUT, |_success| {});
+        // Subscribe to sink input events and sink events
+        context.subscribe(
+            InterestMaskSet::SINK_INPUT | InterestMaskSet::SINK,
+            |_success| {},
+        );
 
         println!("PulseAudio monitoring started successfully");
 

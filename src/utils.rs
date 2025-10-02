@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use tux_icons::icon_fetcher::IconFetcher;
 
 use crate::gfx::TRANSPARENT_ICON;
-use crate::plugin::VCAction;
+use crate::plugin::VolumeControllerAction;
 
 #[derive(Clone, Debug)]
 pub struct VolumeApplicationColumn {
@@ -19,7 +19,7 @@ pub struct VolumeApplicationColumn {
     pub icon_uri: String,
     pub icon_uri_mute: String,
     pub uses_default_icon: bool,
-    pub is_sink: bool,
+    pub is_device: bool,
 }
 
 // this should probably be a setting
@@ -35,7 +35,9 @@ const STARTING_COL_KEY: u8 = 1;
 pub static VOLUME_APPLICATION_COLUMNS: LazyLock<Mutex<HashMap<u8, VolumeApplicationColumn>>> =
     LazyLock::new(|| Mutex::const_new(HashMap::new()));
 
-pub async fn create_application_volume_columns(applications: Vec<crate::audio::traits::AppInfo>) {
+pub async fn create_application_volume_columns(
+    applications: Vec<crate::audio::audio_system::AppInfo>,
+) {
     let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
 
     let mut col_key = STARTING_COL_KEY;
@@ -55,7 +57,7 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
                 icon_uri,
                 icon_uri_mute,
                 uses_default_icon,
-                is_sink: app.is_sink,
+                is_device: app.is_device,
             },
         );
 
@@ -63,7 +65,9 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
     }
 }
 
-pub async fn update_application_volume_columns(applications: Vec<crate::audio::traits::AppInfo>) {
+pub async fn update_application_volume_columns(
+    applications: Vec<crate::audio::audio_system::AppInfo>,
+) {
     let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
 
     let mut col_key = STARTING_COL_KEY;
@@ -74,7 +78,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
             column.name = app.name.clone();
             column.mute = app.mute;
             column.vol_percent = app.volume_percentage;
-            column.is_sink = app.is_sink;
+            column.is_device = app.is_device;
         } else {
             let (icon_uri, icon_uri_mute, uses_default_icon) =
                 get_app_icon_uri(app.icon_name, app.name.clone());
@@ -92,7 +96,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
                     icon_uri,
                     icon_uri_mute,
                     uses_default_icon,
-                    is_sink: app.is_sink,
+                    is_device: app.is_device,
                 },
             );
         }
@@ -111,7 +115,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
 pub async fn update_stream_deck_buttons() {
     let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
 
-    for instance in visible_instances(VCAction::UUID).await {
+    for instance in visible_instances(VolumeControllerAction::UUID).await {
         let Some(column) = columns.get_mut(&instance.coordinates.column) else {
             //TODO switch case for type of device eventually
             cleanup_sd3x5_column(&instance).await;

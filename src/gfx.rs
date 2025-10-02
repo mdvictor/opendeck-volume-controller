@@ -21,7 +21,7 @@ pub static TRANSPARENT_ICON: LazyLock<String> = LazyLock::new(|| {
     format!("data:image/png;base64,{}", base64)
 });
 
-pub enum BarPosition {
+enum BarPosition {
     Upper,
     Lower,
 }
@@ -35,15 +35,31 @@ impl fmt::Display for BarPosition {
     }
 }
 
-fn get_cache() -> &'static Mutex<HashMap<String, String>> {
-    VOLUME_BAR_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// Get data URI format for split volume bar images
+pub fn get_volume_bar_data_uri_split(volume_percent: f32) -> Result<(String, String)> {
+    let upper_key = generate_cache_key(volume_percent, BarPosition::Upper);
+    let lower_key = generate_cache_key(volume_percent, BarPosition::Lower);
+
+    if let (Ok(Some(cached_upper)), Ok(Some(cached_lower))) = (
+        get_cached_value_safe(&upper_key),
+        get_cached_value_safe(&lower_key),
+    ) {
+        return Ok((cached_upper, cached_lower));
+    }
+
+    let (top_base64, bottom_base64) = get_volume_bar_base64_split(volume_percent)?;
+    let top_data_uri = format!("data:image/png;base64,{}", top_base64);
+    let bottom_data_uri = format!("data:image/png;base64,{}", bottom_base64);
+
+    set_cached_value(upper_key, top_data_uri.clone())
+        .expect("Failed to retrieve cached upper part of volume bar");
+    set_cached_value(lower_key, bottom_data_uri.clone())
+        .expect("Failed to retrieve cached lower part of volume bar");
+
+    Ok((top_data_uri, bottom_data_uri))
 }
 
-fn generate_cache_key(volume_percent: f32, position: BarPosition) -> String {
-    format!("vol_{:.1}_part_{}", volume_percent, position)
-}
-
-pub fn set_cached_value(key: String, value: String) -> Result<(), String> {
+fn set_cached_value(key: String, value: String) -> Result<(), String> {
     match get_cache().lock() {
         Ok(mut cache) => {
             cache.insert(key, value);
@@ -51,6 +67,14 @@ pub fn set_cached_value(key: String, value: String) -> Result<(), String> {
         }
         Err(_) => Err("Failed to acquire cache lock".to_string()),
     }
+}
+
+fn get_cache() -> &'static Mutex<HashMap<String, String>> {
+    VOLUME_BAR_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn generate_cache_key(volume_percent: f32, position: BarPosition) -> String {
+    format!("vol_{:.1}_part_{}", volume_percent, position)
 }
 
 fn get_cached_value_safe(key: &str) -> Result<Option<String>, String> {
@@ -90,7 +114,7 @@ fn blend_colors(bg: Rgba<u8>, fg: Rgba<u8>, alpha: f32) -> Rgba<u8> {
 
 /// Calculate signed distance from a point to a rounded rectangle
 /// Negative values mean inside, positive values mean outside
-fn rounded_rect_distance(
+fn volume_bar_distance(
     px: f32,
     py: f32,
     x: f32,
@@ -114,9 +138,9 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
     const ICON_WIDTH: u32 = 144;
     const ICON_HEIGHT: u32 = 144;
     const TOTAL_HEIGHT: u32 = 288;
-    const BAR_WIDTH: u32 = 25;
+    const BAR_WIDTH: u32 = 26;
     const BAR_HEIGHT: u32 = 240;
-    const CIRCLE_RADIUS: u32 = 20;
+    const POINTER_RADIUS: u32 = 20;
     const OUTLINE_THICKNESS: u32 = 6;
 
     let mut full_img = RgbaImage::from_pixel(ICON_WIDTH, TOTAL_HEIGHT, Rgba([0, 0, 0, 0]));
@@ -127,9 +151,8 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
     let bar_fill = Rgba([255, 255, 255, 255]);
     let bar_outline = Rgba([255, 255, 255, 255]);
     let circle_outline = Rgba([255, 255, 255, 255]);
-    let transparent = Rgba([0, 0, 0, 0]);
 
-    draw_rounded_rect_outline_only_aa(
+    draw_volume_bar_outline(
         &mut full_img,
         bar_x,
         bar_y,
@@ -146,7 +169,7 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
 
     if fill_height > OUTLINE_THICKNESS {
         for py in fill_y.max(bar_y + OUTLINE_THICKNESS)..(bar_y + BAR_HEIGHT - OUTLINE_THICKNESS) {
-            for px in (bar_x + OUTLINE_THICKNESS)..(bar_x + BAR_WIDTH - OUTLINE_THICKNESS) {
+            for px in (bar_x + OUTLINE_THICKNESS)..(bar_x + BAR_WIDTH - OUTLINE_THICKNESS + 1) {
                 if px < full_img.width() && py < full_img.height() {
                     full_img.put_pixel(px, py, bar_fill);
                 }
@@ -158,20 +181,12 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
     let circle_x = bar_x + BAR_WIDTH / 2;
     let circle_y = fill_y;
 
-    // this hides what's underneath the volume pointer
-    draw_filled_circle_no_aa(
+    draw_volume_pointer(
         &mut full_img,
         circle_x,
         circle_y,
-        CIRCLE_RADIUS.saturating_sub(OUTLINE_THICKNESS),
-        transparent,
-    );
-
-    draw_hollow_circle(
-        &mut full_img,
-        circle_x,
-        circle_y,
-        CIRCLE_RADIUS,
+        POINTER_RADIUS,
+        Rgba([0, 0, 0, 255]),
         circle_outline,
         OUTLINE_THICKNESS,
     );
@@ -190,48 +205,20 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
     (top_img, bottom_img)
 }
 
-/// Draw a filled circle without antialiasing
-fn draw_filled_circle_no_aa(
+/// Draw a filled circle with outline and antialiasing
+fn draw_volume_pointer(
     img: &mut RgbaImage,
     center_x: u32,
     center_y: u32,
     radius: u32,
-    color: Rgba<u8>,
-) {
-    let cx = center_x as i32;
-    let cy = center_y as i32;
-    let r = radius as i32;
-
-    for y in (cy - r)..=(cy + r) {
-        for x in (cx - r)..=(cx + r) {
-            let dx = x - cx;
-            let dy = y - cy;
-            let distance_squared = dx * dx + dy * dy;
-
-            if distance_squared <= r * r && x >= 0 && y >= 0 {
-                let px = x as u32;
-                let py = y as u32;
-                if px < img.width() && py < img.height() {
-                    img.put_pixel(px, py, color);
-                }
-            }
-        }
-    }
-}
-
-/// Draw a hollow circle with antialiasing
-fn draw_hollow_circle(
-    img: &mut RgbaImage,
-    center_x: u32,
-    center_y: u32,
-    radius: u32,
-    color: Rgba<u8>,
-    thickness: u32,
+    fill_color: Rgba<u8>,
+    outline_color: Rgba<u8>,
+    outline_thickness: u32,
 ) {
     let cx = center_x as f32;
     let cy = center_y as f32;
     let outer_r = radius as f32;
-    let inner_r = (radius as f32) - (thickness as f32);
+    let inner_r = (radius as f32) - (outline_thickness as f32);
 
     let min_x = (cx - outer_r - 1.0).max(0.0) as u32;
     let max_x = (cx + outer_r + 1.0).min(img.width() as f32) as u32;
@@ -244,21 +231,38 @@ fn draw_hollow_circle(
             let dy = py as f32 - cy;
             let distance = (dx * dx + dy * dy).sqrt();
 
-            if distance <= outer_r && distance >= inner_r {
-                let mut alpha: f32 = 1.0;
+            if distance <= outer_r {
+                let bg = img.get_pixel(px, py);
 
-                if distance > outer_r - 1.0 {
-                    alpha = alpha.min(outer_r - distance);
-                }
+                if distance >= inner_r {
+                    // Outline region
+                    let mut alpha: f32 = 1.0;
 
-                if distance < inner_r + 1.0 {
-                    alpha = alpha.min(distance - inner_r);
-                }
+                    // AA for outer edge
+                    if distance > outer_r - 1.0 {
+                        alpha = alpha.min(outer_r - distance);
+                    }
+                    // AA for inner edge
+                    if distance < inner_r + 1.0 {
+                        alpha = alpha.min(distance - inner_r);
+                    }
 
-                if alpha > 0.0 {
-                    let bg = img.get_pixel(px, py);
-                    let blended = blend_colors(*bg, color, alpha);
-                    img.put_pixel(px, py, blended);
+                    if alpha > 0.0 {
+                        let blended = blend_colors(*bg, outline_color, alpha);
+                        img.put_pixel(px, py, blended);
+                    }
+                } else {
+                    // Fill region
+                    let alpha = if distance >= inner_r - 1.0 {
+                        (inner_r - distance).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+
+                    if alpha > 0.0 {
+                        let blended = blend_colors(*bg, fill_color, alpha);
+                        img.put_pixel(px, py, blended);
+                    }
                 }
             }
         }
@@ -266,7 +270,7 @@ fn draw_hollow_circle(
 }
 
 /// Draw only the outline of a rounded rectangle with antialiasing
-fn draw_rounded_rect_outline_only_aa(
+fn draw_volume_bar_outline(
     img: &mut RgbaImage,
     x: u32,
     y: u32,
@@ -293,14 +297,14 @@ fn draw_rounded_rect_outline_only_aa(
             let px_f = px as f32;
             let py_f = py as f32;
 
-            let dist_outer = rounded_rect_distance(px_f, py_f, x_f, y_f, width_f, height_f, r);
+            let dist_outer = volume_bar_distance(px_f, py_f, x_f, y_f, width_f, height_f, r);
 
             let inner_x = x_f + thickness;
             let inner_y = y_f + thickness;
             let inner_width = width_f - thickness * 2.0;
             let inner_height = height_f - thickness * 2.0;
             let inner_r = (r - thickness).max(0.0);
-            let dist_inner = rounded_rect_distance(
+            let dist_inner = volume_bar_distance(
                 px_f,
                 py_f,
                 inner_x,
@@ -332,7 +336,7 @@ fn draw_rounded_rect_outline_only_aa(
 }
 
 /// Get base64 encoded volume bar images for 2 vertical Stream Deck icons
-pub fn get_volume_bar_base64_split(volume_percent: f32) -> Result<(String, String)> {
+fn get_volume_bar_base64_split(volume_percent: f32) -> Result<(String, String)> {
     let (top_img, bottom_img) = generate_volume_bar_split(volume_percent);
 
     let mut top_buffer = Vec::new();
@@ -346,26 +350,4 @@ pub fn get_volume_bar_base64_split(volume_percent: f32) -> Result<(String, Strin
     let bottom_base64 = general_purpose::STANDARD.encode(&bottom_buffer);
 
     Ok((top_base64, bottom_base64))
-}
-
-/// Get data URI format for split volume bar images
-pub fn get_volume_bar_data_uri_split(volume_percent: f32) -> Result<(String, String)> {
-    let upper_key = generate_cache_key(volume_percent, BarPosition::Upper);
-    let lower_key = generate_cache_key(volume_percent, BarPosition::Lower);
-
-    if let (Ok(Some(cached_upper)), Ok(Some(cached_lower))) = (
-        get_cached_value_safe(&upper_key),
-        get_cached_value_safe(&lower_key),
-    ) {
-        return Ok((cached_upper, cached_lower));
-    }
-
-    let (top_base64, bottom_base64) = get_volume_bar_base64_split(volume_percent)?;
-    let top_data_uri = format!("data:image/png;base64,{}", top_base64);
-    let bottom_data_uri = format!("data:image/png;base64,{}", bottom_base64);
-
-    let _ = set_cached_value(upper_key, top_data_uri.clone());
-    let _ = set_cached_value(lower_key, bottom_data_uri.clone());
-
-    Ok((top_data_uri, bottom_data_uri))
 }

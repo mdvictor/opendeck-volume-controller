@@ -1,4 +1,4 @@
-use crate::audio::{AudioSystem, traits::AppInfo};
+use crate::audio::{AppInfo, AudioSystem};
 use libpulse_binding::volume::ChannelVolumes;
 use pulsectl::controllers::{AppControl, DeviceControl, SinkController};
 use std::error::Error;
@@ -32,7 +32,7 @@ impl AudioSystem for PulseAudioSystem {
                 mute: default_sink.mute,
                 volume_percentage: get_pulse_app_volume_percentage(&default_sink.volume),
                 icon_name: Some("audio-card".to_string()),
-                is_sink: true,
+                is_device: true,
             });
         }
 
@@ -49,7 +49,7 @@ impl AudioSystem for PulseAudioSystem {
                 mute: app.mute,
                 volume_percentage: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
-                is_sink: false,
+                is_device: false,
             }
         }));
 
@@ -60,9 +60,9 @@ impl AudioSystem for PulseAudioSystem {
         &mut self,
         app_index: u32,
         percent: f64,
-        is_sink: bool,
+        is_device: bool,
     ) -> Result<(), Box<dyn Error>> {
-        if is_sink {
+        if is_device {
             self.controller
                 .increase_device_volume_by_percent(app_index, percent);
         } else {
@@ -76,9 +76,9 @@ impl AudioSystem for PulseAudioSystem {
         &mut self,
         app_index: u32,
         percent: f64,
-        is_sink: bool,
+        is_device: bool,
     ) -> Result<(), Box<dyn Error>> {
-        if is_sink {
+        if is_device {
             self.controller
                 .decrease_device_volume_by_percent(app_index, percent);
         } else {
@@ -92,9 +92,9 @@ impl AudioSystem for PulseAudioSystem {
         &mut self,
         app_index: u32,
         mute: bool,
-        is_sink: bool,
+        is_device: bool,
     ) -> Result<(), Box<dyn Error>> {
-        if is_sink {
+        if is_device {
             self.controller.set_device_mute_by_index(app_index, mute);
         } else {
             self.controller.set_app_mute(app_index, mute)?;
@@ -111,7 +111,7 @@ fn get_pulse_app_volume_percentage(channel_volumes: &ChannelVolumes) -> f32 {
 
     // Get average of all channels
     let total_volume: u32 = (0..channel_count)
-        .map(|i| channel_volumes.get()[i as usize].0) // Extract the inner value from Volume(x)
+        .map(|i| channel_volumes.get()[i as usize].0)
         .sum();
 
     let avg_volume = total_volume as f32 / channel_count as f32;

@@ -1,10 +1,8 @@
+pub mod audio_system;
 pub mod pulse;
-pub mod pulse_monitor;
-pub mod traits;
 
-// Re-export the important stuff
+pub use audio_system::{AppInfo, AudioSystem};
 pub use pulse::PulseAudioSystem;
-pub use traits::AudioSystem;
 
 pub fn create_audio_system() -> Box<dyn AudioSystem> {
     Box::new(PulseAudioSystem::new().unwrap())

@@ -11,9 +11,9 @@ use crate::{
 // this could be a plugin setting
 const VOLUME_INCREMENT: f32 = 0.1;
 
-pub struct VCAction;
+pub struct VolumeControllerAction;
 #[async_trait]
-impl Action for VCAction {
+impl Action for VolumeControllerAction {
     const UUID: ActionUuid = "com.victormarin.volume-controller.auto-detection.blank";
     type Settings = HashMap<String, String>;
 
@@ -78,7 +78,7 @@ impl Action for VCAction {
                     column.mute = !column.mute;
                     let mut audio_system = audio::create_audio_system();
                     audio_system
-                        .mute_volume(column.uid, column.mute, column.is_sink)
+                        .mute_volume(column.uid, column.mute, column.is_device)
                         .expect("Failed to mute");
 
                     println!("Muting app {}", column.name);
@@ -92,7 +92,7 @@ impl Action for VCAction {
 
                     let mut audio_system = audio::create_audio_system();
                     audio_system
-                        .increase_volume(app_uid, VOLUME_INCREMENT as f64, column.is_sink)
+                        .increase_volume(app_uid, VOLUME_INCREMENT as f64, column.is_device)
                         .expect("Failed to increase volume");
 
                     println!("Volume up in app {} {}", column.name, column.vol_percent);
@@ -101,7 +101,7 @@ impl Action for VCAction {
                     let app_uid = column.uid;
                     let mut audio_system = audio::create_audio_system();
                     audio_system
-                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64, column.is_sink)
+                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64, column.is_device)
                         .expect("Failed to decrease volume");
 
                     println!("Volume down in app {} {}", column.name, column.vol_percent);
@@ -117,7 +117,7 @@ impl Action for VCAction {
 pub async fn init() -> OpenActionResult<()> {
     println!("Stream Deck connected - starting PulseAudio monitoring");
     // start listening to changes
-    pulse_monitor::start_pulse_monitoring();
+    audio::pulse::start_pulse_monitoring();
 
     // create initial map
     let applications = {
@@ -128,7 +128,7 @@ pub async fn init() -> OpenActionResult<()> {
     };
     utils::create_application_volume_columns(applications).await;
 
-    register_action(VCAction).await;
+    register_action(VolumeControllerAction).await;
 
     run(std::env::args().collect()).await
 }

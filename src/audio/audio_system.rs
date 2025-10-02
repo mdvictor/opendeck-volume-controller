@@ -7,7 +7,7 @@ pub struct AppInfo {
     pub mute: bool,
     pub volume_percentage: f32,
     pub icon_name: Option<String>,
-    pub is_sink: bool,
+    pub is_device: bool,
 }
 
 pub trait AudioSystem {
@@ -16,18 +16,18 @@ pub trait AudioSystem {
         &mut self,
         app_index: u32,
         percent: f64,
-        is_sink: bool,
+        is_device: bool,
     ) -> Result<(), Box<dyn Error>>;
     fn decrease_volume(
         &mut self,
         app_index: u32,
         percent: f64,
-        is_sink: bool,
+        is_device: bool,
     ) -> Result<(), Box<dyn Error>>;
     fn mute_volume(
         &mut self,
         app_index: u32,
         mute: bool,
-        is_sink: bool,
+        is_device: bool,
     ) -> Result<(), Box<dyn Error>>;
 }
