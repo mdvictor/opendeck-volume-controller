@@ -17,6 +17,7 @@ pub struct VolumeApplicationColumn {
     pub mute: bool,
     pub vol_percent: f32,
     pub icon_uri: String,
+    pub icon_uri_mute: String,
     pub uses_default_icon: bool,
 }
 
@@ -38,7 +39,8 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
 
     let mut col_key = STARTING_COL_KEY;
     for app in applications {
-        let (icon_uri, uses_default_icon) = get_app_icon_uri(app.icon_name, app.name.clone());
+        let (icon_uri, icon_uri_mute, uses_default_icon) =
+            get_app_icon_uri(app.icon_name, app.name.clone());
         columns.insert(
             col_key,
             VolumeApplicationColumn {
@@ -50,6 +52,7 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
                 mute: app.mute,
                 vol_percent: app.volume_percentage,
                 icon_uri,
+                icon_uri_mute,
                 uses_default_icon,
             },
         );
@@ -71,7 +74,8 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
             column.mute = app.mute;
             column.vol_percent = app.volume_percentage;
         } else {
-            let (icon_uri, uses_default_icon) = get_app_icon_uri(app.icon_name, app.name.clone());
+            let (icon_uri, icon_uri_mute, uses_default_icon) =
+                get_app_icon_uri(app.icon_name, app.name.clone());
             // Insert new column if it doesn't exist
             columns.insert(
                 col_key,
@@ -84,6 +88,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
                     mute: app.mute,
                     vol_percent: app.volume_percentage,
                     icon_uri,
+                    icon_uri_mute,
                     uses_default_icon,
                 },
             );
@@ -151,19 +156,30 @@ async fn cleanup_sd3x5_column(instance: &Instance) {
 }
 
 pub async fn update_header(instance: &Instance, column: &VolumeApplicationColumn) {
-    let _ = instance
-        .set_image(Some(column.icon_uri.clone()), None)
-        .await;
+    let icon_uri = if column.mute {
+        println!("USING MUTED ICO");
+        column.icon_uri_mute.clone()
+    } else {
+        println!("USING NORMAL ICO");
+        column.icon_uri.clone()
+    };
+    println!("icon {}", icon_uri);
+
+    let _ = instance.set_image(Some(icon_uri), None).await;
 
     if column.uses_default_icon {
         let _ = instance.set_title(Some(column.name.clone()), None).await;
     }
 }
 
-/// Get application icon as a base64 data URI
+/// Get application icon as base64 data URIs
 /// If icon_name is None, returns the default wave-sound.png icon
 /// Otherwise, attempts to find and encode the system icon for the given icon name
-pub fn get_app_icon_uri(icon_name: Option<String>, fallback_icon_name: String) -> (String, bool) {
+/// Returns (normal_icon_uri, muted_icon_uri, uses_default_icon)
+pub fn get_app_icon_uri(
+    icon_name: Option<String>,
+    fallback_icon_name: String,
+) -> (String, String, bool) {
     use base64::{Engine as _, engine::general_purpose};
     use std::path::PathBuf;
 
@@ -204,11 +220,69 @@ pub fn get_app_icon_uri(icon_name: Option<String>, fallback_icon_name: String) -
         _ => "image/png",
     };
 
-    // Base64 encode
-    let base64_data = general_purpose::STANDARD.encode(&image_data);
+    // Base64 encode normal version
+    let base64_normal = general_purpose::STANDARD.encode(&image_data);
+    let normal_uri = format!("data:{};base64,{}", mime_type, base64_normal);
 
-    (
-        format!("data:{};base64,{}", mime_type, base64_data),
-        uses_default_icon,
-    )
+    // Create grayscale version
+    let muted_uri = if mime_type == "image/svg+xml" {
+        // For SVG, add a grayscale filter to the SVG XML
+        if let Ok(svg_string) = String::from_utf8(image_data.clone()) {
+            let grayscale_svg = add_grayscale_filter_to_svg(svg_string);
+            let base64_gray = general_purpose::STANDARD.encode(grayscale_svg.as_bytes());
+            format!("data:image/svg+xml;base64,{}", base64_gray)
+        } else {
+            normal_uri.clone()
+        }
+    } else {
+        // For raster images, convert to grayscale
+        if let Ok(img) = image::load_from_memory(&image_data) {
+            let gray_img = image::DynamicImage::ImageLuma8(img.to_luma8());
+            let mut buffer = std::io::Cursor::new(Vec::new());
+            if gray_img
+                .write_to(&mut buffer, image::ImageFormat::Png)
+                .is_ok()
+            {
+                let gray_data = buffer.into_inner();
+                let base64_gray = general_purpose::STANDARD.encode(&gray_data);
+                format!("data:image/png;base64,{}", base64_gray)
+            } else {
+                // Fallback to normal if conversion fails
+                normal_uri.clone()
+            }
+        } else {
+            // Fallback to normal if image loading fails
+            normal_uri.clone()
+        }
+    };
+
+    (normal_uri, muted_uri, uses_default_icon)
+}
+
+/// Add a grayscale CSS filter to an SVG
+fn add_grayscale_filter_to_svg(svg: String) -> String {
+    // Check if the SVG already has a <defs> section
+    if let Some(svg_tag_end) = svg.find('>') {
+        let before_close = &svg[..svg_tag_end + 1];
+        let after_open = &svg[svg_tag_end + 1..];
+
+        // Define the grayscale filter
+        let filter = r#"<defs><filter id="grayscale"><feColorMatrix type="saturate" values="0"/></filter></defs>"#;
+
+        // Add filter attribute to the svg tag
+        let svg_with_filter = if before_close.contains("filter=") {
+            // Already has a filter, don't modify
+            svg
+        } else {
+            // Add filter reference to root svg element and insert filter definition
+            let svg_tag_modified =
+                before_close.replace("<svg", &format!(r#"<svg filter="url(#grayscale)""#));
+            format!("{}{}{}", svg_tag_modified, filter, after_open)
+        };
+
+        svg_with_filter
+    } else {
+        // Invalid SVG, return as-is
+        svg
+    }
 }

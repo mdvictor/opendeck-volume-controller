@@ -79,6 +79,10 @@ pub fn start_pulse_monitoring() {
                     println!("Audio application removed");
                     let _ = refresh_sender.send(());
                 }
+                (Some(Facility::SinkInput), Some(Operation::Changed)) => {
+                    println!("Audio application volume/mute changed");
+                    let _ = refresh_sender.send(());
+                }
                 _ => {}
             }
         })));

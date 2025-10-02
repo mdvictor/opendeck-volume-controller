@@ -18,7 +18,6 @@ impl PulseAudioSystem {
 impl AudioSystem for PulseAudioSystem {
     fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>> {
         let apps = self.controller.list_applications()?;
-        println!("APPS: {:?}", apps);
         let res: Vec<AppInfo> = apps
             .into_iter()
             .map(|app| AppInfo {
