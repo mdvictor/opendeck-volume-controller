@@ -19,6 +19,7 @@ pub struct VolumeApplicationColumn {
     pub icon_uri: String,
     pub icon_uri_mute: String,
     pub uses_default_icon: bool,
+    pub is_sink: bool,
 }
 
 // this should probably be a setting
@@ -54,6 +55,7 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
                 icon_uri,
                 icon_uri_mute,
                 uses_default_icon,
+                is_sink: app.is_sink,
             },
         );
 
@@ -64,7 +66,6 @@ pub async fn create_application_volume_columns(applications: Vec<crate::audio::t
 pub async fn update_application_volume_columns(applications: Vec<crate::audio::traits::AppInfo>) {
     let mut columns = VOLUME_APPLICATION_COLUMNS.lock().await;
 
-    // Update existing columns with new data
     let mut col_key = STARTING_COL_KEY;
     for app in applications {
         if let Some(column) = columns.get_mut(&col_key) {
@@ -73,6 +74,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
             column.name = app.name.clone();
             column.mute = app.mute;
             column.vol_percent = app.volume_percentage;
+            column.is_sink = app.is_sink;
         } else {
             let (icon_uri, icon_uri_mute, uses_default_icon) =
                 get_app_icon_uri(app.icon_name, app.name.clone());
@@ -90,6 +92,7 @@ pub async fn update_application_volume_columns(applications: Vec<crate::audio::t
                     icon_uri,
                     icon_uri_mute,
                     uses_default_icon,
+                    is_sink: app.is_sink,
                 },
             );
         }
@@ -157,13 +160,10 @@ async fn cleanup_sd3x5_column(instance: &Instance) {
 
 pub async fn update_header(instance: &Instance, column: &VolumeApplicationColumn) {
     let icon_uri = if column.mute {
-        println!("USING MUTED ICO");
         column.icon_uri_mute.clone()
     } else {
-        println!("USING NORMAL ICO");
         column.icon_uri.clone()
     };
-    println!("icon {}", icon_uri);
 
     let _ = instance.set_image(Some(icon_uri), None).await;
 
@@ -187,19 +187,11 @@ pub fn get_app_icon_uri(
     let mut uses_default_icon = false;
 
     let icon_path = if let Some(name) = icon_name {
-        // Try primary icon name
         fetcher
             .get_icon_path(name)
-            .or_else(|| {
-                // Try fallback icon name
-                fetcher.get_icon_path(fallback_icon_name.clone())
-            })
-            .unwrap_or_else(|| {
-                // Use default
-                PathBuf::from("imgs/wave-sound.png")
-            })
+            .or_else(|| fetcher.get_icon_path(fallback_icon_name.clone()))
+            .unwrap_or_else(|| PathBuf::from("imgs/wave-sound.png"))
     } else {
-        // Try fallback icon name
         fetcher
             .get_icon_path(fallback_icon_name)
             .unwrap_or_else(|| {
@@ -209,10 +201,8 @@ pub fn get_app_icon_uri(
             })
     };
 
-    // Read the file
     let image_data = std::fs::read(&icon_path).expect("Failed to read icon file");
 
-    // Determine MIME type based on extension
     let mime_type = match icon_path.extension().and_then(|e| e.to_str()) {
         Some("png") => "image/png",
         Some("svg") => "image/svg+xml",
@@ -220,13 +210,11 @@ pub fn get_app_icon_uri(
         _ => "image/png",
     };
 
-    // Base64 encode normal version
     let base64_normal = general_purpose::STANDARD.encode(&image_data);
     let normal_uri = format!("data:{};base64,{}", mime_type, base64_normal);
 
-    // Create grayscale version
+    // grayscale on mute
     let muted_uri = if mime_type == "image/svg+xml" {
-        // For SVG, add a grayscale filter to the SVG XML
         if let Ok(svg_string) = String::from_utf8(image_data.clone()) {
             let grayscale_svg = add_grayscale_filter_to_svg(svg_string);
             let base64_gray = general_purpose::STANDARD.encode(grayscale_svg.as_bytes());
@@ -235,7 +223,6 @@ pub fn get_app_icon_uri(
             normal_uri.clone()
         }
     } else {
-        // For raster images, convert to grayscale
         if let Ok(img) = image::load_from_memory(&image_data) {
             let gray_img = image::DynamicImage::ImageLuma8(img.to_luma8());
             let mut buffer = std::io::Cursor::new(Vec::new());
@@ -247,11 +234,9 @@ pub fn get_app_icon_uri(
                 let base64_gray = general_purpose::STANDARD.encode(&gray_data);
                 format!("data:image/png;base64,{}", base64_gray)
             } else {
-                // Fallback to normal if conversion fails
                 normal_uri.clone()
             }
         } else {
-            // Fallback to normal if image loading fails
             normal_uri.clone()
         }
     };
@@ -269,12 +254,9 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
         // Define the grayscale filter
         let filter = r#"<defs><filter id="grayscale"><feColorMatrix type="saturate" values="0"/></filter></defs>"#;
 
-        // Add filter attribute to the svg tag
         let svg_with_filter = if before_close.contains("filter=") {
-            // Already has a filter, don't modify
             svg
         } else {
-            // Add filter reference to root svg element and insert filter definition
             let svg_tag_modified =
                 before_close.replace("<svg", &format!(r#"<svg filter="url(#grayscale)""#));
             format!("{}{}{}", svg_tag_modified, filter, after_open)
@@ -282,7 +264,6 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
 
         svg_with_filter
     } else {
-        // Invalid SVG, return as-is
         svg
     }
 }

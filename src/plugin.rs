@@ -10,7 +10,6 @@ use crate::{
 
 // this could be a plugin setting
 const VOLUME_INCREMENT: f32 = 0.1;
-const VOLUME_INCREMENT_PERCENTAGE: f32 = VOLUME_INCREMENT * 100.0;
 
 pub struct VCAction;
 #[async_trait]
@@ -23,7 +22,6 @@ impl Action for VCAction {
         instance: &Instance,
         _: &Self::Settings,
     ) -> OpenActionResult<()> {
-        //cleanup
         let _ = instance.set_title(Some(""), None);
         let _ = instance.set_image(Some(TRANSPARENT_ICON.as_str()), None);
 
@@ -34,7 +32,7 @@ impl Action for VCAction {
         let mut columns = utils::VOLUME_APPLICATION_COLUMNS.lock().await;
         let column_key = instance.coordinates.column;
 
-        // Skip column 0 as it's reserved TODO
+        // Skip column 0 as it's reserved TODO make this a setting?
         if column_key == 0 {
             return Ok(());
         }
@@ -77,10 +75,13 @@ impl Action for VCAction {
         if let Some(column) = columns.get_mut(&column_key) {
             match instance.coordinates.row {
                 0 => {
-                    println!("Muting app {}", column.name);
                     column.mute = !column.mute;
                     let mut audio_system = audio::create_audio_system();
-                    audio_system.mute_volume(column.uid, column.mute).unwrap();
+                    audio_system
+                        .mute_volume(column.uid, column.mute, column.is_sink)
+                        .expect("Failed to mute");
+
+                    println!("Muting app {}", column.name);
                 }
                 1 => {
                     let app_uid = column.uid;
@@ -89,55 +90,21 @@ impl Action for VCAction {
                         return Ok(());
                     }
 
-                    {
-                        let mut audio_system = audio::create_audio_system();
-                        audio_system
-                            .increase_volume(app_uid, VOLUME_INCREMENT as f64)
-                            .unwrap();
-                    }
-                    column.vol_percent =
-                        (column.vol_percent + VOLUME_INCREMENT_PERCENTAGE).clamp(0.0, 100.0);
+                    let mut audio_system = audio::create_audio_system();
+                    audio_system
+                        .increase_volume(app_uid, VOLUME_INCREMENT as f64, column.is_sink)
+                        .expect("Failed to increase volume");
 
-                    if let Ok((upper_img, lower_img)) =
-                        gfx::get_volume_bar_data_uri_split(column.vol_percent)
-                    {
-                        instance.set_image(Some(upper_img), None).await?;
-                        if let Some(vol_btn_id) = column.lower_vol_btn_id.clone() {
-                            let Some(related_instance) = get_instance(vol_btn_id).await else {
-                                return Ok(());
-                            };
-
-                            related_instance.set_image(Some(lower_img), None).await?;
-                        }
-                    }
-
-                    println!("Volume up app {} {}", column.name, column.vol_percent);
+                    println!("Volume up in app {} {}", column.name, column.vol_percent);
                 }
                 2 => {
                     let app_uid = column.uid;
-                    {
-                        let mut audio_system = audio::create_audio_system();
-                        audio_system
-                            .decrease_volume(app_uid, VOLUME_INCREMENT as f64)
-                            .unwrap();
-                    }
-                    column.vol_percent =
-                        (column.vol_percent - VOLUME_INCREMENT_PERCENTAGE).clamp(0.0, 100.0);
+                    let mut audio_system = audio::create_audio_system();
+                    audio_system
+                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64, column.is_sink)
+                        .expect("Failed to decrease volume");
 
-                    if let Ok((upper_img, lower_img)) =
-                        gfx::get_volume_bar_data_uri_split(column.vol_percent)
-                    {
-                        instance.set_image(Some(lower_img), None).await?;
-                        if let Some(vol_btn_id) = column.upper_vol_btn_id.clone() {
-                            let Some(related_instance) = get_instance(vol_btn_id).await else {
-                                return Ok(());
-                            };
-
-                            related_instance.set_image(Some(upper_img), None).await?;
-                        }
-                    }
-
-                    println!("Volume down app {} {}", column.name, column.vol_percent);
+                    println!("Volume down in app {} {}", column.name, column.vol_percent);
                 }
                 _ => {}
             }

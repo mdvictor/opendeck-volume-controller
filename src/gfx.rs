@@ -21,7 +21,6 @@ pub static TRANSPARENT_ICON: LazyLock<String> = LazyLock::new(|| {
     format!("data:image/png;base64,{}", base64)
 });
 
-#[derive(Debug)]
 pub enum BarPosition {
     Upper,
     Lower,
@@ -130,7 +129,6 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
     let circle_outline = Rgba([255, 255, 255, 255]);
     let transparent = Rgba([0, 0, 0, 0]);
 
-    // Draw the white outline with antialiasing
     draw_rounded_rect_outline_only_aa(
         &mut full_img,
         bar_x,
@@ -160,6 +158,7 @@ pub fn generate_volume_bar_split(volume_percent: f32) -> (RgbaImage, RgbaImage) 
     let circle_x = bar_x + BAR_WIDTH / 2;
     let circle_y = fill_y;
 
+    // this hides what's underneath the volume pointer
     draw_filled_circle_no_aa(
         &mut full_img,
         circle_x,

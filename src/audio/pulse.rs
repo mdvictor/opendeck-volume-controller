@@ -1,7 +1,9 @@
-use super::traits::{AppInfo, AudioSystem};
+use crate::audio::{AudioSystem, traits::AppInfo};
 use libpulse_binding::volume::ChannelVolumes;
-use pulsectl::controllers::{AppControl, SinkController};
+use pulsectl::controllers::{AppControl, DeviceControl, SinkController};
 use std::error::Error;
+
+const PA_VOLUME_NORM: u32 = 98304; // 150% in PulseAudio
 
 pub struct PulseAudioSystem {
     controller: SinkController,
@@ -17,10 +19,27 @@ impl PulseAudioSystem {
 
 impl AudioSystem for PulseAudioSystem {
     fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>> {
+        let mut res: Vec<AppInfo> = Vec::new();
+
+        // Add the default system sink (main PC audio)
+        if let Ok(default_sink) = self.controller.get_default_device() {
+            res.push(AppInfo {
+                uid: default_sink.index,
+                name: default_sink
+                    .description
+                    .clone()
+                    .unwrap_or("System Audio".to_string()),
+                mute: default_sink.mute,
+                volume_percentage: get_pulse_app_volume_percentage(&default_sink.volume),
+                icon_name: Some("audio-card".to_string()),
+                is_sink: true,
+            });
+        }
+
+        // Add individual applications
         let apps = self.controller.list_applications()?;
-        let res: Vec<AppInfo> = apps
-            .into_iter()
-            .map(|app| AppInfo {
+        res.extend(apps.into_iter().map(|app| {
+            AppInfo {
                 uid: app.index,
                 name: app
                     .proplist
@@ -30,34 +49,62 @@ impl AudioSystem for PulseAudioSystem {
                 mute: app.mute,
                 volume_percentage: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
-            })
-            .collect();
+                is_sink: false,
+            }
+        }));
 
         Ok(res)
     }
 
-    fn increase_volume(&mut self, app_index: u32, percent: f64) -> Result<(), Box<dyn Error>> {
-        self.controller
-            .increase_app_volume_by_percent(app_index, percent);
+    fn increase_volume(
+        &mut self,
+        app_index: u32,
+        percent: f64,
+        is_sink: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        if is_sink {
+            self.controller
+                .increase_device_volume_by_percent(app_index, percent);
+        } else {
+            self.controller
+                .increase_app_volume_by_percent(app_index, percent);
+        }
         Ok(())
     }
 
-    fn decrease_volume(&mut self, app_index: u32, percent: f64) -> Result<(), Box<dyn Error>> {
-        self.controller
-            .decrease_app_volume_by_percent(app_index, percent);
+    fn decrease_volume(
+        &mut self,
+        app_index: u32,
+        percent: f64,
+        is_sink: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        if is_sink {
+            self.controller
+                .decrease_device_volume_by_percent(app_index, percent);
+        } else {
+            self.controller
+                .decrease_app_volume_by_percent(app_index, percent);
+        }
         Ok(())
     }
 
-    fn mute_volume(&mut self, app_index: u32, mute: bool) -> Result<(), Box<dyn Error>> {
-        self.controller.set_app_mute(app_index, mute)?;
+    fn mute_volume(
+        &mut self,
+        app_index: u32,
+        mute: bool,
+        is_sink: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        if is_sink {
+            self.controller.set_device_mute_by_index(app_index, mute);
+        } else {
+            self.controller.set_app_mute(app_index, mute)?;
+        }
         Ok(())
     }
 }
 
 fn get_pulse_app_volume_percentage(channel_volumes: &ChannelVolumes) -> f32 {
-    const PA_VOLUME_NORM: u32 = 98304; // 100% in PulseAudio
     let channel_count = channel_volumes.len();
-
     if channel_count == 0 {
         return 0.0;
     }
@@ -69,5 +116,6 @@ fn get_pulse_app_volume_percentage(channel_volumes: &ChannelVolumes) -> f32 {
 
     let avg_volume = total_volume as f32 / channel_count as f32;
     let perc = (avg_volume / PA_VOLUME_NORM as f32) * 100.0;
+
     perc.min(100.0)
 }
