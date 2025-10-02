@@ -255,18 +255,15 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
         let before_close = &svg[..svg_tag_end + 1];
         let after_open = &svg[svg_tag_end + 1..];
 
-        // Define the grayscale filter
-        let filter = r#"<defs><filter id="grayscale"><feColorMatrix type="saturate" values="0"/></filter></defs>"#;
-
-        let svg_with_filter = if before_close.contains("filter=") {
+        // Simply reduce opacity instead of using filters (avoids blur)
+        let svg_with_opacity = if before_close.contains("opacity=") {
             svg
         } else {
-            let svg_tag_modified =
-                before_close.replace("<svg", &format!(r#"<svg filter="url(#grayscale)""#));
-            format!("{}{}{}", svg_tag_modified, filter, after_open)
+            let svg_tag_modified = before_close.replace("<svg", r#"<svg opacity="0.4""#);
+            format!("{}{}", svg_tag_modified, after_open)
         };
 
-        svg_with_filter
+        svg_with_opacity
     } else {
         svg
     }
