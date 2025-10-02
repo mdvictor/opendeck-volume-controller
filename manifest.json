@@ -8,6 +8,7 @@
   "CategoryIcon": "imgs/plugin/category-icon",
   "Description": "Linux volume controller",
   "Icon": "imgs/marketplace",
+  "PropertyInspectorPath": "pi.html",
   "Actions": [
     {
       "Icon": "imgs/auto",

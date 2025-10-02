@@ -21,19 +21,21 @@ impl AudioSystem for PulseAudioSystem {
     fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>> {
         let mut res: Vec<AppInfo> = Vec::new();
 
-        // Add the default system sink (main PC audio)
-        if let Ok(default_sink) = self.controller.get_default_device() {
-            res.push(AppInfo {
-                uid: default_sink.index,
-                name: default_sink
-                    .description
-                    .clone()
-                    .unwrap_or("System Audio".to_string()),
-                mute: default_sink.mute,
-                volume_percentage: get_pulse_app_volume_percentage(&default_sink.volume),
-                icon_name: Some("audio-card".to_string()),
-                is_device: true,
-            });
+        // Add the default system sink (main PC audio) only if the global flag is set
+        if crate::utils::should_show_system_mixer() {
+            if let Ok(default_sink) = self.controller.get_default_device() {
+                res.push(AppInfo {
+                    uid: default_sink.index,
+                    name: default_sink
+                        .description
+                        .clone()
+                        .unwrap_or("System Audio".to_string()),
+                    mute: default_sink.mute,
+                    volume_percentage: get_pulse_app_volume_percentage(&default_sink.volume),
+                    icon_name: Some("audio-card".to_string()),
+                    is_device: true,
+                });
+            }
         }
 
         // Add individual applications

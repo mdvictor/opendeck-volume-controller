@@ -147,7 +147,7 @@ fn start_refresh_processor() {
     }
 }
 
-async fn refresh_audio_applications() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn refresh_audio_applications() -> Result<(), Box<dyn std::error::Error>> {
     // Get current applications (same logic as manual-detection)
     let applications = {
         let mut audio_system = audio::create();

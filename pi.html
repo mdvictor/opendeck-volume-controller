@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+    <head>
+        <script>
+            let update = () => {};
+
+            function connectOpenActionSocket(
+                inPort,
+                inPropertyInspectorUUID,
+                inRegisterEvent,
+                inInfo,
+                inActionInfo,
+            ) {
+                const websocket = new WebSocket("ws://localhost:" + inPort);
+                inActionInfo = JSON.parse(inActionInfo);
+
+                websocket.onopen = () => {
+                    websocket.send(
+                        JSON.stringify({
+                            event: inRegisterEvent,
+                            uuid: inPropertyInspectorUUID,
+                        }),
+                    );
+                };
+
+                const showSysMixer = document.getElementById("show_sys_mixer");
+                showSysMixer.checked =
+                    inActionInfo.payload.settings.show_sys_mixer ?? false;
+
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.event == "didReceiveSettings") {
+                        showSysMixer.checked =
+                            data.payload.settings.show_sys_mixer ?? false;
+                    }
+                };
+
+                update = () => {
+                    websocket.send(
+                        JSON.stringify({
+                            event: "setSettings",
+                            context: inActionInfo.context,
+                            payload: {
+                                show_sys_mixer: showSysMixer.checked,
+                            },
+                        }),
+                    );
+                };
+            }
+
+            const connectElgatoStreamDeckSocket = connectOpenActionSocket;
+        </script>
+        <style>
+            * {
+                font-family: system-ui, sans-serif;
+                font-size: 16px;
+                color: oklch(92.2% 0 0);
+            }
+
+            body {
+                margin: 16px;
+                background-color: oklch(20.5% 0 0);
+            }
+
+            label {
+                margin-right: 4px;
+            }
+
+            input[type="checkbox"] {
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
+            }
+        </style>
+    </head>
+    <body>
+        <div>
+            <label for="show_sys_mixer">Show system mixer:</label>
+            <input id="show_sys_mixer" type="checkbox" oninput="update();" />
+        </div>
+    </body>
+</html>

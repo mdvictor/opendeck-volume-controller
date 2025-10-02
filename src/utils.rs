@@ -1,9 +1,24 @@
 use openaction::{Action, Instance, visible_instances};
 use tux_icons::icon_fetcher::IconFetcher;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::gfx::TRANSPARENT_ICON;
 use crate::mixer::{self, MixerChannel};
 use crate::plugin::VolumeControllerAction;
+
+// Global flag to track if system mixer should be shown
+static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
+
+// Public getter for the global show_system_mixer flag
+pub fn should_show_system_mixer() -> bool {
+    SHOW_SYSTEM_MIXER.load(Ordering::Relaxed)
+}
+
+// Set the global flag
+pub fn set_show_system_mixer(value: bool) {
+    SHOW_SYSTEM_MIXER.store(value, Ordering::Relaxed);
+}
 
 pub async fn update_stream_deck_buttons() {
     let mut channels = mixer::MIXER_CHANNELS.lock().await;

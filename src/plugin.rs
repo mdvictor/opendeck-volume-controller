@@ -1,31 +1,43 @@
-use std::collections::HashMap;
-
 use openaction::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    audio::{self, *},
-    gfx::{self, TRANSPARENT_ICON},
+    audio::{self, pulse::pulse_monitor::refresh_audio_applications, *},
+    gfx::{self},
     mixer,
-    utils::{self, update_header},
+    utils::{self},
 };
 
-// this could be a plugin setting
 const VOLUME_INCREMENT: f32 = 0.1;
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct VolumeControllerSettings {
+    pub show_sys_mixer: bool,
+}
 
 pub struct VolumeControllerAction;
 #[async_trait]
 impl Action for VolumeControllerAction {
     const UUID: ActionUuid = "com.victormarin.volume-controller.auto-detection.volctrl";
-    type Settings = HashMap<String, String>;
+    type Settings = VolumeControllerSettings;
 
     async fn will_disappear(
         &self,
         instance: &Instance,
         _: &Self::Settings,
     ) -> OpenActionResult<()> {
-        let _ = instance.set_title(Some(""), None);
-        let _ = instance.set_image(Some(TRANSPARENT_ICON.as_str()), None);
+        utils::cleanup_sd3x5_column(instance).await;
+        Ok(())
+    }
 
+    async fn did_receive_settings(
+        &self,
+        _instance: &Instance,
+        settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        utils::set_show_system_mixer(settings.show_sys_mixer);
+        let _ = refresh_audio_applications().await;
         Ok(())
     }
 
@@ -49,7 +61,7 @@ impl Action for VolumeControllerAction {
 
         match instance.coordinates.row {
             0 => {
-                update_header(instance, channel).await;
+                utils::update_header(instance, channel).await;
                 channel.header_id = Some(instance.instance_id.clone());
             }
             1 | 2 => {
