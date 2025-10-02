@@ -31,7 +31,7 @@ impl AudioSystem for PulseAudioSystem {
                         .clone()
                         .unwrap_or("System Audio".to_string()),
                     mute: default_sink.mute,
-                    volume_percentage: get_pulse_app_volume_percentage(&default_sink.volume),
+                    vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
                     icon_name: Some("audio-card".to_string()),
                     is_device: true,
                 });
@@ -49,7 +49,7 @@ impl AudioSystem for PulseAudioSystem {
                     .unwrap_or("app_stream".to_string())
                     .to_lowercase(),
                 mute: app.mute,
-                volume_percentage: get_pulse_app_volume_percentage(&app.volume),
+                vol_percent: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
                 is_device: false,
             }

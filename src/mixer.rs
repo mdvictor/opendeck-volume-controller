@@ -48,7 +48,7 @@ pub async fn create_mixer_channels(applications: Vec<crate::audio::audio_system:
                 uid: app.uid,
                 name: app.name.clone(),
                 mute: app.mute,
-                vol_percent: app.volume_percentage,
+                vol_percent: app.vol_percent,
                 icon_uri,
                 icon_uri_mute,
                 uses_default_icon,
@@ -65,20 +65,35 @@ pub async fn update_mixer_channels(applications: Vec<crate::audio::audio_system:
 
     let mut col_key = STARTING_COL_KEY;
     for app in applications {
-        let (icon_uri, icon_uri_mute, uses_default_icon) =
-            get_app_icon_uri(app.icon_name, app.name.clone());
         if let Some(channel) = channels.get_mut(&col_key) {
-            // Update the channel data
-            channel.uid = app.uid;
-            channel.name = app.name.clone();
-            channel.mute = app.mute;
-            channel.vol_percent = app.volume_percentage;
-            channel.icon_uri = icon_uri;
-            channel.icon_uri_mute = icon_uri_mute;
-            channel.uses_default_icon = uses_default_icon;
-            channel.is_device = app.is_device;
+            // Check if we need to update the channel
+            let needs_update = channel.uid != app.uid
+                || channel.name != app.name
+                || channel.mute != app.mute
+                || (channel.vol_percent - app.vol_percent).abs() > 0.01
+                || channel.is_device != app.is_device;
+
+            if needs_update {
+                if channel.uid != app.uid {
+                    let (icon_uri, icon_uri_mute, uses_default_icon) =
+                        get_app_icon_uri(app.icon_name, app.name.clone());
+                    channel.icon_uri = icon_uri;
+                    channel.icon_uri_mute = icon_uri_mute;
+                    channel.uses_default_icon = uses_default_icon;
+                }
+
+                // Update the channel data
+                channel.uid = app.uid;
+                channel.name = app.name;
+                channel.mute = app.mute;
+                channel.vol_percent = app.vol_percent;
+                channel.is_device = app.is_device;
+            }
         } else {
             // Insert new channel if it doesn't exist
+            let (icon_uri, icon_uri_mute, uses_default_icon) =
+                get_app_icon_uri(app.icon_name, app.name.clone());
+
             channels.insert(
                 col_key,
                 MixerChannel {
@@ -86,9 +101,9 @@ pub async fn update_mixer_channels(applications: Vec<crate::audio::audio_system:
                     upper_vol_btn_id: None,
                     lower_vol_btn_id: None,
                     uid: app.uid,
-                    name: app.name.clone(),
+                    name: app.name,
                     mute: app.mute,
-                    vol_percent: app.volume_percentage,
+                    vol_percent: app.vol_percent,
                     icon_uri,
                     icon_uri_mute,
                     uses_default_icon,

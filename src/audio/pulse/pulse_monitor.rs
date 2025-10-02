@@ -136,8 +136,21 @@ fn start_refresh_processor() {
 
     if let Some(mut receiver) = receiver {
         tokio::spawn(async move {
-            while receiver.recv().await.is_some() {
-                println!("Processing refresh request...");
+            loop {
+                // Wait for first refresh request
+                if receiver.recv().await.is_none() {
+                    break;
+                }
+
+                // Debounce: wait 100ms and drain all pending refresh requests
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                // Drain any additional refresh requests that came in during debounce period
+                while receiver.try_recv().is_ok() {
+                    // Just drain them
+                }
+
+                println!("Processing debounced refresh request...");
                 match refresh_audio_applications().await {
                     Ok(_) => println!("Audio applications refreshed successfully"),
                     Err(e) => eprintln!("Failed to refresh audio applications: {:?}", e),
