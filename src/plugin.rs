@@ -8,7 +8,7 @@ use crate::{
     utils::{self},
 };
 
-const VOLUME_INCREMENT: f32 = 0.1;
+const VOLUME_INCREMENT: f64 = 0.1;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
@@ -109,7 +109,7 @@ impl Action for VolumeControllerAction {
 
                     let mut audio_system = audio::create();
                     audio_system
-                        .increase_volume(app_uid, VOLUME_INCREMENT as f64, channel.is_device)
+                        .increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
                         .expect("Failed to increase volume");
 
                     println!("Volume up in app {} {}", channel.name, channel.vol_percent);
@@ -118,7 +118,7 @@ impl Action for VolumeControllerAction {
                     let app_uid = channel.uid;
                     let mut audio_system = audio::create();
                     audio_system
-                        .decrease_volume(app_uid, VOLUME_INCREMENT as f64, channel.is_device)
+                        .decrease_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
                         .expect("Failed to decrease volume");
 
                     println!(
