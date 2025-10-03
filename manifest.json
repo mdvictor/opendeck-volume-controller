@@ -13,7 +13,7 @@
     {
       "Icon": "imgs/auto",
       "Name": "Volume Control Auto Grid",
-      "UUID": "com.victormarin.volume-controller.auto-detection.volctrl",
+      "UUID": "com.victormarin.volume-controller.volctrl",
       "Tooltip": "Volume controller grid part, fill your SD with this",
       "States": [{}]
     }

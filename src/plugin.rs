@@ -19,7 +19,7 @@ pub struct VolumeControllerSettings {
 pub struct VolumeControllerAction;
 #[async_trait]
 impl Action for VolumeControllerAction {
-    const UUID: ActionUuid = "com.victormarin.volume-controller.auto-detection.volctrl";
+    const UUID: ActionUuid = "com.victormarin.volume-controller.volctrl";
     type Settings = VolumeControllerSettings;
 
     async fn will_disappear(
