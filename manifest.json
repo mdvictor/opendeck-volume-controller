@@ -5,7 +5,7 @@
   "CodePathLin": "volumeController",
   "OS": [{ "Platform": "linux" }],
   "Category": "Volume Controller",
-  "CategoryIcon": "imgs/plugin/category-icon",
+  "CategoryIcon": "FIX_THIS",
   "Description": "Linux volume controller",
   "Icon": "imgs/marketplace",
   "PropertyInspectorPath": "pi.html",
