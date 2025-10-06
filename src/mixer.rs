@@ -18,23 +18,13 @@ pub struct MixerChannel {
     pub is_device: bool,
 }
 
-// this should probably be a setting
-// currently the volume controller will expect the SD volume apps
-// to start on the second column, while the first one would be reserved
-// for other actions (e.g.: the cancel btn that would take you back to
-// your initial profile)
-// but I reckon this is rather limiting? maybe you want all btns to be
-// apps, but then you have no way to exit the controller through the SD?
-// TODO
-const STARTING_COL_KEY: u8 = 1;
-
 pub static MIXER_CHANNELS: LazyLock<Mutex<HashMap<u8, MixerChannel>>> =
     LazyLock::new(|| Mutex::const_new(HashMap::new()));
 
 pub async fn create_mixer_channels(applications: Vec<crate::audio::audio_system::AppInfo>) {
     let mut channels = MIXER_CHANNELS.lock().await;
 
-    let mut col_key = STARTING_COL_KEY;
+    let mut col_key = 0;
     for app in applications {
         let (icon_uri, icon_uri_mute, uses_default_icon) =
             get_app_icon_uri(app.icon_name, app.name.clone());
@@ -63,7 +53,7 @@ pub async fn create_mixer_channels(applications: Vec<crate::audio::audio_system:
 pub async fn update_mixer_channels(applications: Vec<crate::audio::audio_system::AppInfo>) {
     let mut channels = MIXER_CHANNELS.lock().await;
 
-    let mut col_key = STARTING_COL_KEY;
+    let mut col_key = 0;
     for app in applications {
         if let Some(channel) = channels.get_mut(&col_key) {
             // Check if we need to update the channel

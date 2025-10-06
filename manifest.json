@@ -10,11 +10,11 @@
   "OS": [{ "Platform": "linux" }],
   "Category": "Volume Controller",
   "Description": "Take full control of your sound experience with fine-tuned per-app volume management!",
-  "Icon": "imgs/icon",
+  "Icon": "img/icon",
   "PropertyInspectorPath": "pi.html",
   "Actions": [
     {
-      "Icon": "imgs/grid-slider",
+      "Icon": "img/grid-slider",
       "Name": "Volume Control Auto Grid",
       "UUID": "com.victormarin.volume-controller.volctrl",
       "Tooltip": "Volume controller grid part, fill your SD with this",

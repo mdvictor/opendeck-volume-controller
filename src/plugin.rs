@@ -7,8 +7,13 @@ use crate::{
     mixer,
     utils::{self},
 };
+use std::{collections::HashMap, sync::LazyLock};
+use tokio::sync::Mutex;
 
 const VOLUME_INCREMENT: f64 = 0.1;
+
+pub static COLUMN_TO_CHANNEL_MAP: LazyLock<Mutex<HashMap<u8, u8>>> =
+    LazyLock::new(|| Mutex::const_new(HashMap::new()));
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
@@ -28,6 +33,10 @@ impl Action for VolumeControllerAction {
         _: &Self::Settings,
     ) -> OpenActionResult<()> {
         utils::cleanup_sd3x5_column(instance).await;
+
+        let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
+        column_map.remove(&instance.coordinates.column);
+
         Ok(())
     }
 
@@ -42,16 +51,16 @@ impl Action for VolumeControllerAction {
     }
 
     async fn will_appear(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
+        let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
-        let column_key = instance.coordinates.column;
 
-        // Skip column 0 as it's reserved TODO make this a setting?
-        if column_key == 0 {
-            utils::cleanup_sd3x5_column(instance).await;
-            return Ok(());
-        }
+        let sd_column = instance.coordinates.column;
 
-        let channel = match channels.get_mut(&column_key) {
+        // Calculate next index before entry() call to avoid borrow checker issue
+        let next_index = column_map.len() as u8;
+        let channel_index = *column_map.entry(sd_column).or_insert(next_index);
+
+        let channel = match channels.get_mut(&channel_index) {
             Some(ch) => ch,
             None => {
                 utils::cleanup_sd3x5_column(instance).await;
@@ -86,10 +95,17 @@ impl Action for VolumeControllerAction {
     }
 
     async fn key_down(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
+        let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
-        let column_key = instance.coordinates.column;
 
-        if let Some(channel) = channels.get_mut(&column_key) {
+        let sd_column = instance.coordinates.column;
+
+        // Look up the channel index for this SD column
+        let Some(&channel_index) = column_map.get(&sd_column) else {
+            return Ok(());
+        };
+
+        if let Some(channel) = channels.get_mut(&channel_index) {
             match instance.coordinates.row {
                 0 => {
                     channel.mute = !channel.mute;

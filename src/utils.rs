@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::gfx::TRANSPARENT_ICON;
 use crate::mixer::{self, MixerChannel};
-use crate::plugin::VolumeControllerAction;
+use crate::plugin::{COLUMN_TO_CHANNEL_MAP, VolumeControllerAction};
 
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
@@ -21,10 +21,17 @@ pub fn set_show_system_mixer(value: bool) {
 }
 
 pub async fn update_stream_deck_buttons() {
+    let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
     let mut channels = mixer::MIXER_CHANNELS.lock().await;
 
     for instance in visible_instances(VolumeControllerAction::UUID).await {
-        let Some(channel) = channels.get_mut(&instance.coordinates.column) else {
+        let sd_column = instance.coordinates.column;
+
+        let Some(&channel_index) = column_map.get(&sd_column) else {
+            continue;
+        };
+
+        let Some(channel) = channels.get_mut(&channel_index) else {
             //TODO switch case for type of device eventually
             cleanup_sd3x5_column(&instance).await;
             continue;
