@@ -794,6 +794,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "oa-volume-controller"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "image",
+ "lazy_static",
+ "libpulse-binding",
+ "log",
+ "openaction",
+ "pulsectl-rs",
+ "serde",
+ "serde_json",
+ "simplelog",
+ "tokio",
+ "tux-icons",
+]
+
+[[package]]
 name = "objc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -858,26 +878,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "opendeck-volume-controller"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "image",
- "lazy_static",
- "libpulse-binding",
- "log",
- "openaction",
- "pulsectl-rs",
- "serde",
- "serde_json",
- "simplelog",
- "tokio",
- "tux-icons",
 ]
 
 [[package]]
