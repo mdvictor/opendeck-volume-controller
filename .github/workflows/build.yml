@@ -33,6 +33,9 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpulse-dev
+
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
 
