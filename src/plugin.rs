@@ -32,7 +32,7 @@ impl Action for VolumeControllerAction {
         instance: &Instance,
         _: &Self::Settings,
     ) -> OpenActionResult<()> {
-        utils::cleanup_sd3x5_column(instance).await;
+        utils::cleanup_sd_column(instance).await;
 
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         column_map.remove(&instance.coordinates.column);
@@ -63,7 +63,7 @@ impl Action for VolumeControllerAction {
         let channel = match channels.get_mut(&channel_index) {
             Some(ch) => ch,
             None => {
-                utils::cleanup_sd3x5_column(instance).await;
+                utils::cleanup_sd_column(instance).await;
                 return Ok(());
             }
         };

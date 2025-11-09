@@ -1,5 +1,7 @@
 # OA Volume Controller Plugin
 
+![Showcase](./img/readme.png)
+
 A per-application volume control plugin for Stream Deck using OpenDeck on Linux.
 
 ## Overview
@@ -25,5 +27,6 @@ After setting your grid, switch profiles and return to your volume controller pr
 ## ToDo:
 
 - [ ] Make this work on the SD+ so it responds to the dials and shows volume on the LCD?
-- [ ] Figure out a layout for the 2-row SDs
+- [ ] Figure out a layout for the 2-row SDs 
+  - Thinking about adding an extra action here that would just be +/- volume 
 - [ ] Fix bugs

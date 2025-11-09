@@ -20,9 +20,21 @@ pub fn set_show_system_mixer(value: bool) {
     SHOW_SYSTEM_MIXER.store(value, Ordering::Relaxed);
 }
 
+pub async fn get_device_row_count() -> Option<u8> {
+    let instances = visible_instances(VolumeControllerAction::UUID).await;
+    if instances.is_empty() {
+        return None;
+    }
+
+    let max_row = instances.iter().map(|i| i.coordinates.row).max()?;
+
+    Some(max_row + 1)
+}
+
 pub async fn update_stream_deck_buttons() {
     let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
     let mut channels = mixer::MIXER_CHANNELS.lock().await;
+    let row_count = get_device_row_count().await;
 
     for instance in visible_instances(VolumeControllerAction::UUID).await {
         let sd_column = instance.coordinates.column;
@@ -32,8 +44,14 @@ pub async fn update_stream_deck_buttons() {
         };
 
         let Some(channel) = channels.get_mut(&channel_index) else {
-            //TODO switch case for type of device eventually
-            cleanup_sd3x5_column(&instance).await;
+            if let Some(rows) = row_count {
+                if rows > 3 {
+                    cleanup_sd_column(&instance).await;
+                } else {
+                    // TODO check if there are knobs too and call appropiate cleanup fn
+                    // update_sd_column_with_knob(&instance).await;
+                }
+            }
             continue;
         };
 
@@ -44,8 +62,14 @@ pub async fn update_stream_deck_buttons() {
             _ => {}
         }
 
-        //TODO switch case for type of device eventually
-        update_sd3x5_btns(channel, &instance).await;
+        if let Some(rows) = row_count {
+            if rows > 3 {
+                update_sd_column(channel, &instance).await;
+            } else {
+                // TODO same logic as in cleanup for knobs
+                // update_sd_column_with_knob(&instance).await;
+            }
+        }
     }
 }
 
@@ -135,7 +159,7 @@ pub fn get_app_icon_uri(
     (normal_uri, muted_uri, uses_default_icon)
 }
 
-pub async fn cleanup_sd3x5_column(instance: &Instance) {
+pub async fn cleanup_sd_column(instance: &Instance) {
     let _ = instance.set_title(Some(""), None).await;
     let _ = instance
         .set_image(Some(TRANSPARENT_ICON.as_str()), None)
@@ -163,7 +187,7 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
     }
 }
 
-async fn update_sd3x5_btns(channel: &MixerChannel, instance: &Instance) {
+async fn update_sd_column(channel: &MixerChannel, instance: &Instance) {
     match instance.coordinates.row {
         0 => {
             update_header(instance, channel).await;
