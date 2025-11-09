@@ -1,8 +1,8 @@
 # OA Volume Controller Plugin
 
-![Showcase](./img/readme.png)
-
 A per-application volume control plugin for Stream Deck using OpenDeck on Linux.
+
+![Showcase](./img/readme.png)
 
 ## Overview
 
