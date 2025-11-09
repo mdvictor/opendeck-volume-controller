@@ -45,7 +45,7 @@ pub async fn update_stream_deck_buttons() {
 
         let Some(channel) = channels.get_mut(&channel_index) else {
             if let Some(rows) = row_count {
-                if rows > 3 {
+                if rows >= 3 {
                     cleanup_sd_column(&instance).await;
                 } else {
                     // TODO check if there are knobs too and call appropiate cleanup fn
@@ -63,7 +63,7 @@ pub async fn update_stream_deck_buttons() {
         }
 
         if let Some(rows) = row_count {
-            if rows > 3 {
+            if rows >= 3 {
                 update_sd_column(channel, &instance).await;
             } else {
                 // TODO same logic as in cleanup for knobs
@@ -105,14 +105,14 @@ pub fn get_app_icon_uri(
         fetcher
             .get_icon_path(name)
             .or_else(|| fetcher.get_icon_path(fallback_icon_name.clone()))
-            .unwrap_or_else(|| PathBuf::from("imgs/wave-sound.png"))
+            .unwrap_or_else(|| PathBuf::from("img/wave-sound.png"))
     } else {
         fetcher
             .get_icon_path(fallback_icon_name)
             .unwrap_or_else(|| {
                 // Use default
                 uses_default_icon = true;
-                PathBuf::from("imgs/wave-sound.png")
+                PathBuf::from("img/wave-sound.png")
             })
     };
 
