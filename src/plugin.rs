@@ -35,7 +35,12 @@ impl Action for VolumeControllerAction {
         utils::cleanup_sd_column(instance).await;
 
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
-        column_map.remove(&instance.coordinates.column);
+        column_map.remove(
+            &instance
+                .coordinates
+                .expect("coordinates must be present")
+                .column,
+        );
 
         Ok(())
     }
@@ -53,8 +58,9 @@ impl Action for VolumeControllerAction {
     async fn will_appear(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
+        let coords = instance.coordinates.expect("coordinates must be present");
 
-        let sd_column = instance.coordinates.column;
+        let sd_column = coords.column;
 
         // Calculate next index before entry() call to avoid borrow checker issue
         let next_index = column_map.len() as u8;
@@ -68,7 +74,7 @@ impl Action for VolumeControllerAction {
             }
         };
 
-        match instance.coordinates.row {
+        match coords.row {
             0 => {
                 utils::update_header(instance, channel).await;
                 channel.header_id = Some(instance.instance_id.clone());
@@ -78,7 +84,7 @@ impl Action for VolumeControllerAction {
                     gfx::get_volume_bar_data_uri_split(channel.vol_percent)
                 {
                     let img;
-                    if instance.coordinates.row == 1 {
+                    if coords.row == 1 {
                         channel.upper_vol_btn_id = Some(instance.instance_id.clone());
                         img = upper_img;
                     } else {
@@ -97,8 +103,9 @@ impl Action for VolumeControllerAction {
     async fn key_down(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
         let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
+        let coords = instance.coordinates.expect("coordinates must be present");
 
-        let sd_column = instance.coordinates.column;
+        let sd_column = coords.column;
 
         // Look up the channel index for this SD column
         let Some(&channel_index) = column_map.get(&sd_column) else {
@@ -106,7 +113,7 @@ impl Action for VolumeControllerAction {
         };
 
         if let Some(channel) = channels.get_mut(&channel_index) {
-            match instance.coordinates.row {
+            match coords.row {
                 0 => {
                     channel.mute = !channel.mute;
                     let mut audio_system = audio::create();

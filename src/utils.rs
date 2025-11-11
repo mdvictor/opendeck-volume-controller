@@ -26,7 +26,10 @@ pub async fn get_device_row_count() -> Option<u8> {
         return None;
     }
 
-    let max_row = instances.iter().map(|i| i.coordinates.row).max()?;
+    let max_row = instances
+        .iter()
+        .map(|i| i.coordinates.expect("coordinates must be present").row)
+        .max()?;
 
     Some(max_row + 1)
 }
@@ -37,7 +40,8 @@ pub async fn update_stream_deck_buttons() {
     let row_count = get_device_row_count().await;
 
     for instance in visible_instances(VolumeControllerAction::UUID).await {
-        let sd_column = instance.coordinates.column;
+        let coords = instance.coordinates.expect("coordinates must be present");
+        let sd_column = coords.column;
 
         let Some(&channel_index) = column_map.get(&sd_column) else {
             continue;
@@ -55,7 +59,7 @@ pub async fn update_stream_deck_buttons() {
             continue;
         };
 
-        match instance.coordinates.row {
+        match coords.row {
             0 => channel.header_id = Some(instance.instance_id.clone()),
             1 => channel.upper_vol_btn_id = Some(instance.instance_id.clone()),
             2 => channel.lower_vol_btn_id = Some(instance.instance_id.clone()),
@@ -188,7 +192,9 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
 }
 
 async fn update_sd_column(channel: &MixerChannel, instance: &Instance) {
-    match instance.coordinates.row {
+    let coords = instance.coordinates.expect("coordinates must be present");
+
+    match coords.row {
         0 => {
             update_header(instance, channel).await;
         }
@@ -197,7 +203,7 @@ async fn update_sd_column(channel: &MixerChannel, instance: &Instance) {
             if let Ok((upper_img, lower_img)) =
                 crate::gfx::get_volume_bar_data_uri_split(channel.vol_percent)
             {
-                if instance.coordinates.row == 1 {
+                if coords.row == 1 {
                     let _ = instance.set_image(Some(upper_img), None).await;
                 } else {
                     let _ = instance.set_image(Some(lower_img), None).await;

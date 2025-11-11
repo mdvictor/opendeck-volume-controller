@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 pulsectl-rs = "0.3"
-openaction = "2.1"
+openaction = "2.2.0"
 tokio = { version = "1.45", features = ["full"] }
 log = "0.4"
 simplelog = "0.12"
