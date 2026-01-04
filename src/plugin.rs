@@ -121,7 +121,7 @@ impl Action for VolumeControllerAction {
                         .mute_volume(channel.uid, channel.mute, channel.is_device)
                         .expect("Failed to mute");
 
-                    println!("Muting app {}", channel.name);
+                    println!("Muting app {}", channel.app_name);
                 }
                 1 => {
                     let app_uid = channel.uid;
@@ -135,7 +135,10 @@ impl Action for VolumeControllerAction {
                         .increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
                         .expect("Failed to increase volume");
 
-                    println!("Volume up in app {} {}", channel.name, channel.vol_percent);
+                    println!(
+                        "Volume up in app {} {}",
+                        channel.app_name, channel.vol_percent
+                    );
                 }
                 2 => {
                     let app_uid = channel.uid;
@@ -146,7 +149,7 @@ impl Action for VolumeControllerAction {
 
                     println!(
                         "Volume down in app {} {}",
-                        channel.name, channel.vol_percent
+                        channel.app_name, channel.vol_percent
                     );
                 }
                 _ => {}

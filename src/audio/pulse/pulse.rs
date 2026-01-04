@@ -22,36 +22,55 @@ impl AudioSystem for PulseAudioSystem {
         let mut res: Vec<AppInfo> = Vec::new();
 
         // Add the default system sink (main PC audio) only if the global flag is set
-        if crate::utils::should_show_system_mixer() {
-            if let Ok(default_sink) = self.controller.get_default_device() {
-                res.push(AppInfo {
-                    uid: default_sink.index,
-                    name: default_sink
-                        .description
-                        .clone()
-                        .unwrap_or("System Audio".to_string()),
-                    mute: default_sink.mute,
-                    vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
-                    icon_name: Some("audio-card".to_string()),
-                    is_device: true,
-                });
-            }
+        if crate::utils::should_show_system_mixer()
+            && let Ok(default_sink) = self.controller.get_default_device()
+        {
+            res.push(AppInfo {
+                uid: default_sink.index,
+                app_name: default_sink
+                    .description
+                    .clone()
+                    .unwrap_or("System Audio".to_string()),
+                sink_name: Some("System Audio".to_string()),
+                mute: default_sink.mute,
+                vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
+                icon_name: Some("audio-card".to_string()),
+                is_device: true,
+                is_multi_sink_app: false,
+            });
         }
 
         // Add individual applications
         let apps = self.controller.list_applications()?;
-        res.extend(apps.into_iter().map(|app| {
-            AppInfo {
-                uid: app.index,
-                name: app
-                    .proplist
+
+        let app_names: Vec<String> = apps
+            .iter()
+            .map(|app| {
+                app.proplist
                     .get_str("application.name")
                     .unwrap_or("app_stream".to_string())
-                    .to_lowercase(),
+                    .to_lowercase()
+            })
+            .collect();
+
+        res.extend(apps.into_iter().map(|app| {
+            let app_name = app
+                .proplist
+                .get_str("application.name")
+                .unwrap_or("app_stream".to_string())
+                .to_lowercase();
+
+            let name_count = app_names.iter().filter(|&name| name == &app_name).count();
+
+            AppInfo {
+                uid: app.index,
+                app_name,
+                sink_name: app.name,
                 mute: app.mute,
                 vol_percent: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
                 is_device: false,
+                is_multi_sink_app: name_count > 1,
             }
         }));
 
