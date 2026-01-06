@@ -127,7 +127,8 @@ pub async fn get_device_row_count() -> Option<u8> {
 
     let max_row = instances
         .iter()
-        .map(|i| i.coordinates.expect("coordinates must be present").row)
+        .filter_map(|i| i.coordinates.as_ref())
+        .map(|coords| coords.row)
         .max()?;
 
     Some(max_row + 1)
@@ -139,7 +140,9 @@ pub async fn update_stream_deck_buttons() {
     let row_count = get_device_row_count().await;
 
     for instance in visible_instances(VolumeControllerAction::UUID).await {
-        let coords = instance.coordinates.expect("coordinates must be present");
+        let Some(coords) = instance.coordinates else {
+            continue;
+        };
         let sd_column = coords.column;
 
         let Some(&channel_index) = column_map.get(&sd_column) else {
@@ -151,7 +154,7 @@ pub async fn update_stream_deck_buttons() {
                 if rows >= 3 {
                     cleanup_sd_column(&instance).await;
                 } else {
-                    // TODO check if there are knobs/dials too and call appropiate cleanup fn
+                    // TODO check if there are knobs/dials too and call appropriate cleanup fn
                     // update_sd_column_with_knob(&instance).await;
                 }
             }
@@ -169,7 +172,7 @@ pub async fn update_stream_deck_buttons() {
             if rows >= 3 {
                 update_sd_column(channel, &instance).await;
             } else {
-                // TODO same logic as in cleanup for knobs/dials
+                // TODO same logic as in cleanup for knobs/dials (appropriate update fn)
                 // update_sd_column_with_knob(&instance).await;
             }
         }
@@ -310,7 +313,9 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
 }
 
 async fn update_sd_column(channel: &MixerChannel, instance: &Instance) {
-    let coords = instance.coordinates.expect("coordinates must be present");
+    let Some(coords) = instance.coordinates else {
+        return;
+    };
 
     match coords.row {
         0 => {

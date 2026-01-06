@@ -42,13 +42,13 @@ impl Action for VolumeControllerAction {
     ) -> OpenActionResult<()> {
         utils::cleanup_sd_column(instance).await;
 
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
-        column_map.remove(
-            &instance
-                .coordinates
-                .expect("coordinates must be present")
-                .column,
-        );
+        column_map.remove(&coords.column);
 
         Ok(())
     }
@@ -101,9 +101,13 @@ impl Action for VolumeControllerAction {
         let _ = instance.set_settings(&*shared).await;
         drop(shared);
 
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
-        let coords = instance.coordinates.expect("coordinates must be present");
 
         let sd_column = coords.column;
 
@@ -167,7 +171,10 @@ impl Action for VolumeControllerAction {
             );
             drop(press_control);
 
-            let coords = instance.coordinates.expect("coordinates must be present");
+            let Some(coords) = instance.coordinates else {
+                println!("Warning: Instance {} has no coordinates", instance.instance_id);
+                return Ok(());
+            };
             let sd_column = coords.column;
 
             if duration_ms > 1000 && coords.row == 0 {
@@ -192,19 +199,19 @@ impl Action for VolumeControllerAction {
 
                     {
                         let mut audio_system = audio::create();
-                        audio_system
-                            .mute_volume(uid, false, is_device)
-                            .expect("Failed to unmute");
+                        if let Err(e) = audio_system.mute_volume(uid, false, is_device) {
+                            println!("Warning: Failed to unmute audio: {}", e);
+                        }
                     } // audio_system is dropped here
 
                     // Read cached shared settings, append app, and save back
-                    let mut shared_settings = SHARED_SETTINGS.lock().await;
-                    if !shared_settings.ignored_apps_list.contains(&app_name) {
-                        shared_settings.ignored_apps_list.push(app_name.clone());
-                    }
-                    let updated_settings = shared_settings.clone();
-                    *shared_settings = updated_settings.clone();
-                    drop(shared_settings);
+                    let updated_settings = {
+                        let mut shared_settings = SHARED_SETTINGS.lock().await;
+                        if !shared_settings.ignored_apps_list.contains(&app_name) {
+                            shared_settings.ignored_apps_list.push(app_name.clone());
+                        }
+                        shared_settings.clone()
+                    };
 
                     // Save ignored apps to file
                     if let Err(e) = utils::save_ignored_apps(&updated_settings.ignored_apps_list) {
@@ -229,9 +236,13 @@ impl Action for VolumeControllerAction {
         press_control.set_press_time(instance.instance_id.clone());
         drop(press_control); // Release lock early
 
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
         let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
-        let coords = instance.coordinates.expect("coordinates must be present");
 
         let sd_column = coords.column;
 
@@ -245,11 +256,11 @@ impl Action for VolumeControllerAction {
                 0 => {
                     channel.mute = !channel.mute;
                     let mut audio_system = audio::create();
-                    audio_system
-                        .mute_volume(channel.uid, channel.mute, channel.is_device)
-                        .expect("Failed to mute");
-
-                    println!("Muting app {}", channel.app_name);
+                    if let Err(e) = audio_system.mute_volume(channel.uid, channel.mute, channel.is_device) {
+                        println!("Warning: Failed to toggle mute for {}: {}", channel.app_name, e);
+                    } else {
+                        println!("Muting app {}", channel.app_name);
+                    }
                 }
                 1 => {
                     let app_uid = channel.uid;
@@ -259,26 +270,26 @@ impl Action for VolumeControllerAction {
                     }
 
                     let mut audio_system = audio::create();
-                    audio_system
-                        .increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
-                        .expect("Failed to increase volume");
-
-                    println!(
-                        "Volume up in app {} {}",
-                        channel.app_name, channel.vol_percent
-                    );
+                    if let Err(e) = audio_system.increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device) {
+                        println!("Warning: Failed to increase volume for {}: {}", channel.app_name, e);
+                    } else {
+                        println!(
+                            "Volume up in app {} {}",
+                            channel.app_name, channel.vol_percent
+                        );
+                    }
                 }
                 2 => {
                     let app_uid = channel.uid;
                     let mut audio_system = audio::create();
-                    audio_system
-                        .decrease_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
-                        .expect("Failed to decrease volume");
-
-                    println!(
-                        "Volume down in app {} {}",
-                        channel.app_name, channel.vol_percent
-                    );
+                    if let Err(e) = audio_system.decrease_volume(app_uid, VOLUME_INCREMENT, channel.is_device) {
+                        println!("Warning: Failed to decrease volume for {}: {}", channel.app_name, e);
+                    } else {
+                        println!(
+                            "Volume down in app {} {}",
+                            channel.app_name, channel.vol_percent
+                        );
+                    }
                 }
                 _ => {}
             }
