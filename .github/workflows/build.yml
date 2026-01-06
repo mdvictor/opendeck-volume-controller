@@ -79,15 +79,15 @@ jobs:
       - name: Get plugin directory name
         id: plugin_name
         run: |
-          PLUGIN_NAME=$(basename "${{ github.workspace }}")
+          PLUGIN_NAME="com.victormarin.volume-controller.sdPlugin"
           echo "name=$PLUGIN_NAME" >> $GITHUB_OUTPUT
 
       - name: Create plugin package
         run: |
           # Plugin directory should have .sdPlugin extension
           PLUGIN_DIR="${{ steps.plugin_name.outputs.name }}"
-          # Zip name is without .sdPlugin (it gets removed)
-          ZIP_NAME="${PLUGIN_DIR%.sdPlugin}.zip"
+          # Zip name is com.victormarin.volume-controller.zip
+          ZIP_NAME="com.victormarin.volume-controller.zip"
 
           mkdir -p "$PLUGIN_DIR"
 
@@ -136,8 +136,8 @@ jobs:
       - name: Get plugin directory name and zip name
         id: plugin_name
         run: |
-          PLUGIN_NAME=$(basename "${{ github.workspace }}")
-          ZIP_NAME="${PLUGIN_NAME%.sdPlugin}.zip"
+          PLUGIN_NAME="com.victormarin.volume-controller.sdPlugin"
+          ZIP_NAME="com.victormarin.volume-controller.zip"
           echo "name=$PLUGIN_NAME" >> $GITHUB_OUTPUT
           echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
 
