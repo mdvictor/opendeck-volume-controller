@@ -21,37 +21,62 @@ impl AudioSystem for PulseAudioSystem {
     fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>> {
         let mut res: Vec<AppInfo> = Vec::new();
 
-        // Add the default system sink (main PC audio) only if the global flag is set
-        if crate::utils::should_show_system_mixer() {
-            if let Ok(default_sink) = self.controller.get_default_device() {
-                res.push(AppInfo {
-                    uid: default_sink.index,
-                    name: default_sink
-                        .description
-                        .clone()
-                        .unwrap_or("System Audio".to_string()),
-                    mute: default_sink.mute,
-                    vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
-                    icon_name: Some("audio-card".to_string()),
-                    is_device: true,
-                });
-            }
-        }
-
-        // Add individual applications
+        // Add individual applications first to collect all app names
         let apps = self.controller.list_applications()?;
-        res.extend(apps.into_iter().map(|app| {
-            AppInfo {
-                uid: app.index,
-                name: app
-                    .proplist
+
+        // Collect all app names including system mixer if present
+        let mut app_names: Vec<String> = apps
+            .iter()
+            .map(|app| {
+                app.proplist
                     .get_str("application.name")
                     .unwrap_or("app_stream".to_string())
-                    .to_lowercase(),
+                    .to_lowercase()
+            })
+            .collect();
+
+        // Add the default system sink (main PC audio) only if the global flag is set
+        if crate::utils::should_show_system_mixer()
+            && let Ok(default_sink) = self.controller.get_default_device()
+        {
+            let system_name = default_sink
+                .description
+                .clone()
+                .unwrap_or("System Audio".to_string());
+
+            // Add system mixer name to app_names for duplicate detection
+            app_names.push(system_name.clone());
+
+            res.push(AppInfo {
+                uid: default_sink.index,
+                app_name: system_name,
+                sink_name: Some("System Audio".to_string()),
+                mute: default_sink.mute,
+                vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
+                icon_name: Some("audio-card".to_string()),
+                is_device: true,
+                is_multi_sink_app: false,
+            });
+        }
+
+        res.extend(apps.into_iter().map(|app| {
+            let app_name = app
+                .proplist
+                .get_str("application.name")
+                .unwrap_or("app_stream".to_string())
+                .to_lowercase();
+
+            let name_count = app_names.iter().filter(|&name| name == &app_name).count();
+
+            AppInfo {
+                uid: app.index,
+                app_name,
+                sink_name: app.name,
                 mute: app.mute,
                 vol_percent: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
                 is_device: false,
+                is_multi_sink_app: name_count > 1,
             }
         }));
 

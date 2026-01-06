@@ -7,6 +7,8 @@ use crate::gfx::TRANSPARENT_ICON;
 use crate::mixer::{self, MixerChannel};
 use crate::plugin::{COLUMN_TO_CHANNEL_MAP, VolumeControllerAction};
 
+const MAX_TITLE_CHARS_BEFORE_TRUNCATION: usize = 8;
+
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
 
@@ -86,8 +88,29 @@ pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
 
     let _ = instance.set_image(Some(icon_uri), None).await;
 
-    if channel.uses_default_icon {
-        let _ = instance.set_title(Some(channel.name.clone()), None).await;
+    // Set title based on priority: multi-sink app > uses default icon > no title
+    if channel.is_multi_sink_app {
+        let _ = instance
+            .set_title(
+                channel.sink_name.as_ref().map(|name| {
+                    if name.len() > MAX_TITLE_CHARS_BEFORE_TRUNCATION {
+                        format!(
+                            "{}...",
+                            name.chars().take(MAX_TITLE_CHARS_BEFORE_TRUNCATION).collect::<String>()
+                        )
+                    } else {
+                        name.clone()
+                    }
+                }),
+                None,
+            )
+            .await;
+    } else if channel.uses_default_icon {
+        let _ = instance
+            .set_title(Some(channel.app_name.clone()), None)
+            .await;
+    } else {
+        let _ = instance.set_title(Some(""), None).await;
     }
 }
 
@@ -141,23 +164,21 @@ pub fn get_app_icon_uri(
         } else {
             normal_uri.clone()
         }
-    } else {
-        if let Ok(img) = image::load_from_memory(&image_data) {
-            let gray_img = image::DynamicImage::ImageLuma8(img.to_luma8());
-            let mut buffer = std::io::Cursor::new(Vec::new());
-            if gray_img
-                .write_to(&mut buffer, image::ImageFormat::Png)
-                .is_ok()
-            {
-                let gray_data = buffer.into_inner();
-                let base64_gray = general_purpose::STANDARD.encode(&gray_data);
-                format!("data:image/png;base64,{}", base64_gray)
-            } else {
-                normal_uri.clone()
-            }
+    } else if let Ok(img) = image::load_from_memory(&image_data) {
+        let gray_img = image::DynamicImage::ImageLuma8(img.to_luma8());
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        if gray_img
+            .write_to(&mut buffer, image::ImageFormat::Png)
+            .is_ok()
+        {
+            let gray_data = buffer.into_inner();
+            let base64_gray = general_purpose::STANDARD.encode(&gray_data);
+            format!("data:image/png;base64,{}", base64_gray)
         } else {
             normal_uri.clone()
         }
+    } else {
+        normal_uri.clone()
     };
 
     (normal_uri, muted_uri, uses_default_icon)
@@ -178,14 +199,12 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
         let after_open = &svg[svg_tag_end + 1..];
 
         // Simply reduce opacity instead of using filters (avoids blur)
-        let svg_with_opacity = if before_close.contains("opacity=") {
+        if before_close.contains("opacity=") {
             svg
         } else {
             let svg_tag_modified = before_close.replace("<svg", r#"<svg opacity="0.4""#);
             format!("{}{}", svg_tag_modified, after_open)
-        };
-
-        svg_with_opacity
+        }
     } else {
         svg
     }

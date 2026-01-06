@@ -3,11 +3,13 @@ use std::error::Error;
 #[derive(Debug)]
 pub struct AppInfo {
     pub uid: u32,
-    pub name: String,
+    pub app_name: String,
+    pub sink_name: Option<String>,
     pub mute: bool,
     pub vol_percent: f32,
     pub icon_name: Option<String>,
     pub is_device: bool,
+    pub is_multi_sink_app: bool,
 }
 
 pub trait AudioSystem {
