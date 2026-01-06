@@ -2,15 +2,58 @@ use openaction::{Action, Instance, visible_instances};
 use tux_icons::icon_fetcher::IconFetcher;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::fs;
 
 use crate::gfx::TRANSPARENT_ICON;
 use crate::mixer::{self, MixerChannel};
 use crate::plugin::{COLUMN_TO_CHANNEL_MAP, VolumeControllerAction};
 
 const MAX_TITLE_CHARS_BEFORE_TRUNCATION: usize = 8;
+const SETTINGS_FILE_NAME: &str = "ignored_apps.json";
 
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
+
+pub struct ButtonPressControl {
+    pub action_id: Option<String>,
+    time_ms: Option<u128>,
+}
+
+impl ButtonPressControl {
+    pub fn new() -> Self {
+        ButtonPressControl {
+            action_id: None,
+            time_ms: None,
+        }
+    }
+
+    pub fn set_press_time(&mut self, action_id: String) {
+        self.action_id = Some(action_id);
+        self.time_ms = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        );
+    }
+
+    pub fn get_release_time(&mut self) -> Option<u128> {
+        self.action_id.as_ref()?;
+        self.action_id = None;
+
+        if let Some(press_time) = self.time_ms.take() {
+            let release_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let duration = release_time - press_time;
+            return Some(duration);
+        }
+        None
+    }
+}
 
 // Public getter for the global show_system_mixer flag
 pub fn should_show_system_mixer() -> bool {
@@ -20,6 +63,60 @@ pub fn should_show_system_mixer() -> bool {
 // Set the global flag
 pub fn set_show_system_mixer(value: bool) {
     SHOW_SYSTEM_MIXER.store(value, Ordering::Relaxed);
+}
+
+/// Get the path to the settings file in the plugin directory
+fn get_settings_file_path() -> PathBuf {
+    let mut path = std::env::current_exe()
+        .expect("Failed to get executable path")
+        .parent()
+        .expect("Failed to get parent directory")
+        .to_path_buf();
+    path.push(SETTINGS_FILE_NAME);
+    path
+}
+
+/// Load ignored apps list from the settings file
+pub fn load_ignored_apps() -> Vec<String> {
+    let file_path = get_settings_file_path();
+
+    if !file_path.exists() {
+        println!("No settings file found at {:?}, starting with empty ignored apps list", file_path);
+        return Vec::new();
+    }
+
+    match fs::read_to_string(&file_path) {
+        Ok(contents) => {
+            match serde_json::from_str::<Vec<String>>(&contents) {
+                Ok(apps) => {
+                    println!("Loaded {} ignored apps from {:?}", apps.len(), file_path);
+                    apps
+                }
+                Err(e) => {
+                    println!("Failed to parse settings file: {}. Starting with empty list.", e);
+                    Vec::new()
+                }
+            }
+        }
+        Err(e) => {
+            println!("Failed to read settings file: {}. Starting with empty list.", e);
+            Vec::new()
+        }
+    }
+}
+
+/// Save ignored apps list to the settings file
+pub fn save_ignored_apps(ignored_apps: &[String]) -> Result<(), String> {
+    let file_path = get_settings_file_path();
+
+    let json = serde_json::to_string_pretty(ignored_apps)
+        .map_err(|e| format!("Failed to serialize ignored apps: {}", e))?;
+
+    fs::write(&file_path, json)
+        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+
+    println!("Saved {} ignored apps to {:?}", ignored_apps.len(), file_path);
+    Ok(())
 }
 
 pub async fn get_device_row_count() -> Option<u8> {
@@ -54,7 +151,7 @@ pub async fn update_stream_deck_buttons() {
                 if rows >= 3 {
                     cleanup_sd_column(&instance).await;
                 } else {
-                    // TODO check if there are knobs too and call appropiate cleanup fn
+                    // TODO check if there are knobs/dials too and call appropiate cleanup fn
                     // update_sd_column_with_knob(&instance).await;
                 }
             }
@@ -72,7 +169,7 @@ pub async fn update_stream_deck_buttons() {
             if rows >= 3 {
                 update_sd_column(channel, &instance).await;
             } else {
-                // TODO same logic as in cleanup for knobs
+                // TODO same logic as in cleanup for knobs/dials
                 // update_sd_column_with_knob(&instance).await;
             }
         }
@@ -96,7 +193,9 @@ pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
                     if name.len() > MAX_TITLE_CHARS_BEFORE_TRUNCATION {
                         format!(
                             "{}...",
-                            name.chars().take(MAX_TITLE_CHARS_BEFORE_TRUNCATION).collect::<String>()
+                            name.chars()
+                                .take(MAX_TITLE_CHARS_BEFORE_TRUNCATION)
+                                .collect::<String>()
                         )
                     } else {
                         name.clone()
