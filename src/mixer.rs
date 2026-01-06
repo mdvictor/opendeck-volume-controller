@@ -54,11 +54,6 @@ pub async fn create_mixer_channels(applications: Vec<crate::audio::audio_system:
 pub async fn update_mixer_channels(applications: Vec<crate::audio::audio_system::AppInfo>) {
     let mut channels = MIXER_CHANNELS.lock().await;
 
-    let app_names: Vec<String> = applications
-        .iter()
-        .map(|app| app.app_name.clone())
-        .collect();
-
     let mut col_key = 0;
     for app in applications {
         if let Some(channel) = channels.get_mut(&col_key) {
@@ -87,13 +82,7 @@ pub async fn update_mixer_channels(applications: Vec<crate::audio::audio_system:
                 channel.mute = app.mute;
                 channel.vol_percent = app.vol_percent;
                 channel.is_device = app.is_device;
-
-                let name_count = app_names
-                    .iter()
-                    .filter(|&name| name == &channel.app_name)
-                    .count();
-
-                channel.is_multi_sink_app = name_count > 1;
+                channel.is_multi_sink_app = app.is_multi_sink_app;
             }
         } else {
             // Insert new channel if it doesn't exist

@@ -7,7 +7,7 @@ use crate::gfx::TRANSPARENT_ICON;
 use crate::mixer::{self, MixerChannel};
 use crate::plugin::{COLUMN_TO_CHANNEL_MAP, VolumeControllerAction};
 
-const MAX_TITLE_CHARS: usize = 8;
+const MAX_TITLE_CHARS_BEFORE_TRUNCATION: usize = 8;
 
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
@@ -88,27 +88,28 @@ pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
 
     let _ = instance.set_image(Some(icon_uri), None).await;
 
-    if channel.uses_default_icon {
-        let _ = instance
-            .set_title(Some(channel.app_name.clone()), None)
-            .await;
-    }
-
+    // Set title based on priority: multi-sink app > uses default icon > no title
     if channel.is_multi_sink_app {
         let _ = instance
             .set_title(
                 channel.sink_name.as_ref().map(|name| {
-                    format!(
-                        "{}...",
-                        name.chars().take(MAX_TITLE_CHARS).collect::<String>()
-                    )
+                    if name.len() > MAX_TITLE_CHARS_BEFORE_TRUNCATION {
+                        format!(
+                            "{}...",
+                            name.chars().take(MAX_TITLE_CHARS_BEFORE_TRUNCATION).collect::<String>()
+                        )
+                    } else {
+                        name.clone()
+                    }
                 }),
                 None,
             )
             .await;
-    }
-
-    if !channel.uses_default_icon && !channel.is_multi_sink_app {
+    } else if channel.uses_default_icon {
+        let _ = instance
+            .set_title(Some(channel.app_name.clone()), None)
+            .await;
+    } else {
         let _ = instance.set_title(Some(""), None).await;
     }
 }
