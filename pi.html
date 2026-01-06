@@ -27,11 +27,49 @@
                 showSysMixer.checked =
                     inActionInfo.payload.settings.show_sys_mixer ?? false;
 
+                let ignoredAppsList = inActionInfo.payload.settings.ignored_apps_list ?? [];
+
+                const renderIgnoredApps = () => {
+                    const container = document.getElementById("ignored_apps_list");
+                    container.innerHTML = "";
+
+                    if (ignoredAppsList.length === 0) {
+                        container.innerHTML = '<div style="color: oklch(60% 0 0); font-style: italic;">No ignored apps</div>';
+                        return;
+                    }
+
+                    ignoredAppsList.forEach((appName, index) => {
+                        const item = document.createElement("div");
+                        item.className = "ignored-app-item";
+                        item.innerHTML = `
+                            <span>${appName}</span>
+                            <button class="remove-btn" data-index="${index}">X</button>
+                        `;
+                        container.appendChild(item);
+                    });
+
+                    // Add click handlers to remove buttons
+                    document.querySelectorAll(".remove-btn").forEach(btn => {
+                        btn.addEventListener("click", (e) => {
+                            const index = parseInt(e.target.getAttribute("data-index"));
+                            ignoredAppsList.splice(index, 1);
+                            renderIgnoredApps();
+                            update();
+                        });
+                    });
+                };
+
+                renderIgnoredApps();
+
                 websocket.onmessage = (event) => {
                     const data = JSON.parse(event.data);
+                    console.log("PI received event:", data.event, data);
                     if (data.event == "didReceiveSettings") {
+                        console.log("Updating PI with settings:", data.payload.settings);
                         showSysMixer.checked =
                             data.payload.settings.show_sys_mixer ?? false;
+                        ignoredAppsList = data.payload.settings.ignored_apps_list ?? [];
+                        renderIgnoredApps();
                     }
                 };
 
@@ -42,6 +80,7 @@
                             context: inActionInfo.context,
                             payload: {
                                 show_sys_mixer: showSysMixer.checked,
+                                ignored_apps_list: ignoredAppsList,
                             },
                         }),
                     );
@@ -71,12 +110,81 @@
                 height: 20px;
                 cursor: pointer;
             }
+
+            .section {
+                margin-bottom: 20px;
+            }
+
+            .section-title {
+                font-weight: bold;
+                margin-bottom: 8px;
+                color: oklch(92.2% 0 0);
+            }
+
+            #ignored_apps_list {
+                margin-top: 8px;
+            }
+
+            .ignored-app-item {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 8px 12px;
+                margin-bottom: 4px;
+                background-color: oklch(25% 0 0);
+                border-radius: 4px;
+            }
+
+            .ignored-app-item span {
+                flex: 1;
+            }
+
+            .remove-btn {
+                background-color: transparent;
+                color: oklch(70% 0.15 20);
+                border: 1px solid oklch(50% 0.1 20);
+                border-radius: 3px;
+                width: 24px;
+                height: 24px;
+                cursor: pointer;
+                font-size: 18px;
+                font-weight: normal;
+                line-height: 1;
+                padding: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.15s ease;
+                flex-shrink: 0;
+                margin-left: 8px;
+            }
+
+            .remove-btn:hover {
+                background-color: oklch(50% 0.2 20);
+                color: white;
+                border-color: oklch(55% 0.2 20);
+                transform: scale(1.1);
+            }
+
+            .remove-btn:active {
+                background-color: oklch(40% 0.18 20);
+                border-color: oklch(45% 0.15 20);
+                transform: scale(0.95);
+            }
         </style>
     </head>
     <body>
-        <div>
+        <div class="section">
             <label for="show_sys_mixer">Show system mixer:</label>
             <input id="show_sys_mixer" type="checkbox" oninput="update();" />
+        </div>
+
+        <div class="section">
+            <div class="section-title">Ignored Apps</div>
+            <div style="color: oklch(70% 0 0); font-size: 14px; margin-bottom: 8px;">
+                Long-press (1+ seconds) on an app header to add it to this list
+            </div>
+            <div id="ignored_apps_list"></div>
         </div>
     </body>
 </html>
