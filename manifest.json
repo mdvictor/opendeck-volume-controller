@@ -1,7 +1,7 @@
 {
   "Name": "Volume Controller",
   "Author": "Victor Marin",
-  "Version": "1.0.0",
+  "Version": "1.0.3",
   "CodePaths": {
     "x86_64-unknown-linux-gnu": "oa-volume-controller-x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu": "oa-volume-controller-aarch64-unknown-linux-gnu"

@@ -1,7 +1,15 @@
-name: Build
+name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.1)'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -39,8 +47,7 @@ jobs:
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Rename binary and output artifact name (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Rename binary and output artifact name
         id: rename_unix
         shell: bash
         run: |
@@ -55,3 +62,130 @@ jobs:
           name: ${{ steps.rename_unix.outputs.artifact_name }}
           path: ${{ steps.rename_unix.outputs.artifact_name }}
           compression-level: 0
+
+  package:
+    name: Package Plugin
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Get plugin directory name
+        id: plugin_name
+        run: |
+          PLUGIN_NAME="com.victormarin.volume-controller.sdPlugin"
+          echo "name=$PLUGIN_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create plugin package
+        run: |
+          # Plugin directory should have .sdPlugin extension
+          PLUGIN_DIR="${{ steps.plugin_name.outputs.name }}"
+          # Zip name is com.victormarin.volume-controller.zip
+          ZIP_NAME="com.victormarin.volume-controller.zip"
+
+          mkdir -p "$PLUGIN_DIR"
+
+          # Copy binaries from artifacts
+          cp binaries/oa-volume-controller-x86_64-unknown-linux-gnu/oa-volume-controller-x86_64-unknown-linux-gnu "$PLUGIN_DIR/"
+          cp binaries/oa-volume-controller-aarch64-unknown-linux-gnu/oa-volume-controller-aarch64-unknown-linux-gnu "$PLUGIN_DIR/"
+          chmod +x "$PLUGIN_DIR"/oa-volume-controller-*
+
+          # Copy required files
+          cp manifest.json "$PLUGIN_DIR/"
+          cp LICENSE "$PLUGIN_DIR/"
+          cp README.md "$PLUGIN_DIR/"
+          cp pi.html "$PLUGIN_DIR/"
+          cp Cargo.toml "$PLUGIN_DIR/"
+          cp Cargo.lock "$PLUGIN_DIR/"
+
+          # Copy img directory
+          cp -r img "$PLUGIN_DIR/"
+
+          # Create zip with ASCII encoding (zip name without .sdPlugin)
+          zip -Ar "$ZIP_NAME" "$PLUGIN_DIR"
+
+          echo "Created $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+        id: package
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-package
+          path: ${{ steps.package.outputs.zip_name }}
+          compression-level: 0
+
+  release:
+    name: Create GitHub Release
+    needs: package
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get plugin directory name and zip name
+        id: plugin_name
+        run: |
+          PLUGIN_NAME="com.victormarin.volume-controller.sdPlugin"
+          ZIP_NAME="com.victormarin.volume-controller.zip"
+          echo "name=$PLUGIN_NAME" >> $GITHUB_OUTPUT
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download plugin package
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-package
+          path: .
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## Volume Controller Plugin Release
+
+          ### Installation
+          1. Download the `${{ steps.plugin_name.outputs.zip_name }}` file
+          2. Extract it to your OpenDeck plugins directory
+          3. Restart OpenDeck
+
+          ### Features
+          - Per-app volume control
+          - Persistent ignored apps list
+          - System mixer toggle
+          - PulseAudio integration
+
+          ### Changes
+          See commit history for detailed changes.
+          EOF
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: ${{ steps.plugin_name.outputs.zip_name }}
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
