@@ -169,8 +169,14 @@ pub async fn refresh_audio_applications() -> Result<(), Box<dyn std::error::Erro
             .map_err(|e| format!("Error fetching applications: {:?}", e))?
     };
 
+    // Get ignored apps list from shared settings
+    let ignored_apps = {
+        let settings = crate::plugin::SHARED_SETTINGS.lock().await;
+        settings.ignored_apps_list.clone()
+    };
+
     // Update mixers and Stream Deck buttons
-    mixer::update_mixer_channels(applications).await;
+    mixer::update_mixer_channels(applications, &ignored_apps).await;
     utils::update_stream_deck_buttons().await;
 
     Ok(())

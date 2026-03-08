@@ -1,11 +1,13 @@
 use openaction::*;
+use openaction::global_events::{GlobalEventHandler, DidReceiveGlobalSettingsEvent, set_global_event_handler};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
     audio::{self, pulse::pulse_monitor::refresh_audio_applications, *},
     gfx::{self},
     mixer,
-    utils::{self},
+    utils::{self, ButtonPressControl},
 };
 use std::{collections::HashMap, sync::LazyLock};
 use tokio::sync::Mutex;
@@ -15,13 +17,61 @@ const VOLUME_INCREMENT: f64 = 0.1;
 pub static COLUMN_TO_CHANNEL_MAP: LazyLock<Mutex<HashMap<u8, u8>>> =
     LazyLock::new(|| Mutex::const_new(HashMap::new()));
 
+pub static BUTTON_PRESS_CONTROL: LazyLock<Mutex<ButtonPressControl>> =
+    LazyLock::new(|| Mutex::const_new(ButtonPressControl::new()));
+
+pub static SHARED_SETTINGS: LazyLock<Mutex<VolumeControllerSettings>> =
+    LazyLock::new(|| Mutex::const_new(VolumeControllerSettings::default()));
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct VolumeControllerSettings {
     pub show_sys_mixer: bool,
+    pub ignored_apps_list: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct GlobalPluginSettings {
+    pub ignored_apps_list: Vec<String>,
+}
+
+pub struct GlobalHandler;
+
+#[async_trait]
+impl GlobalEventHandler for GlobalHandler {
+    async fn plugin_ready(&self) -> OpenActionResult<()> {
+        // Request global settings on startup so ignored_apps_list is loaded
+        let _ = get_global_settings().await;
+        Ok(())
+    }
+
+    async fn did_receive_global_settings(&self, event: DidReceiveGlobalSettingsEvent) -> OpenActionResult<()> {
+        let global: GlobalPluginSettings = serde_json::from_value(event.payload.settings)
+            .unwrap_or_default();
+
+        println!("did_receive_global_settings: {} ignored apps", global.ignored_apps_list.len());
+
+        let mut shared = SHARED_SETTINGS.lock().await;
+        if shared.ignored_apps_list != global.ignored_apps_list {
+            shared.ignored_apps_list = global.ignored_apps_list.clone();
+            drop(shared);
+
+            // Sync ignored_apps_list into all instance settings
+            let current = SHARED_SETTINGS.lock().await.clone();
+            for inst in visible_instances(VolumeControllerAction::UUID).await {
+                let _ = inst.set_settings(&current).await;
+            }
+
+            let _ = refresh_audio_applications().await;
+        }
+
+        Ok(())
+    }
 }
 
 pub struct VolumeControllerAction;
+
 #[async_trait]
 impl Action for VolumeControllerAction {
     const UUID: ActionUuid = "com.victormarin.volume-controller.volctrl";
@@ -34,31 +84,66 @@ impl Action for VolumeControllerAction {
     ) -> OpenActionResult<()> {
         utils::cleanup_sd_column(instance).await;
 
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
-        column_map.remove(
-            &instance
-                .coordinates
-                .expect("coordinates must be present")
-                .column,
-        );
+        column_map.remove(&coords.column);
 
         Ok(())
     }
 
     async fn did_receive_settings(
         &self,
-        _instance: &Instance,
+        instance: &Instance,
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        utils::set_show_system_mixer(settings.show_sys_mixer);
-        let _ = refresh_audio_applications().await;
+        println!("did_receive_settings for instance {}: show_sys_mixer={}",
+            instance.instance_id, settings.show_sys_mixer);
+
+        // Check if show_sys_mixer changed to avoid infinite loops
+        let mut cached = SHARED_SETTINGS.lock().await;
+        let settings_changed = cached.show_sys_mixer != settings.show_sys_mixer;
+
+        if settings_changed {
+            println!("Settings changed, broadcasting to all instances");
+            cached.show_sys_mixer = settings.show_sys_mixer;
+            drop(cached);
+
+            // Broadcast show_sys_mixer to all other instances
+            for inst in visible_instances(Self::UUID).await {
+                if inst.instance_id != instance.instance_id {
+                    println!("Broadcasting to instance {}", inst.instance_id);
+                    let _ = inst.set_settings(settings).await;
+                }
+            }
+
+            // Apply show_sys_mixer setting
+            utils::set_show_system_mixer(settings.show_sys_mixer);
+            let _ = refresh_audio_applications().await;
+        } else {
+            drop(cached);
+            println!("Settings unchanged, skipping broadcast");
+        }
+
         Ok(())
     }
 
     async fn will_appear(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
+        // Sync with shared settings when appearing
+        let shared = SHARED_SETTINGS.lock().await;
+        let _ = instance.set_settings(&*shared).await;
+        drop(shared);
+
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
-        let coords = instance.coordinates.expect("coordinates must be present");
 
         let sd_column = coords.column;
 
@@ -100,10 +185,101 @@ impl Action for VolumeControllerAction {
         Ok(())
     }
 
+    async fn key_up(
+        &self,
+        instance: &Instance,
+        _settings: &Self::Settings,
+    ) -> OpenActionResult<()> {
+        let mut press_control = BUTTON_PRESS_CONTROL.lock().await;
+
+        // Validate this is the correct button press
+        if let Some(action_id) = press_control.action_id.as_ref() {
+            if action_id != &instance.instance_id {
+                drop(press_control);
+                return Ok(());
+            }
+        }
+
+        if let Some(duration_ms) = press_control.get_release_time() {
+            println!(
+                "Button {} held for {} ms",
+                instance.instance_id, duration_ms
+            );
+            drop(press_control);
+
+            let Some(coords) = instance.coordinates else {
+                println!("Warning: Instance {} has no coordinates", instance.instance_id);
+                return Ok(());
+            };
+            let sd_column = coords.column;
+
+            if duration_ms > 1000 && coords.row == 0 {
+                let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
+                let mut channels = mixer::MIXER_CHANNELS.lock().await;
+
+                // Look up the channel index for this SD column
+                let Some(&channel_index) = column_map.get(&sd_column) else {
+                    return Ok(());
+                };
+
+                if let Some(channel) = channels.get_mut(&channel_index) {
+                    let app_name = channel.app_name.clone();
+                    let uid = channel.uid;
+                    let is_device = channel.is_device;
+
+                    channel.mute = false;
+
+                    // Drop locks before potentially blocking operations
+                    drop(channels);
+                    drop(column_map);
+
+                    {
+                        let mut audio_system = audio::create();
+                        if let Err(e) = audio_system.mute_volume(uid, false, is_device) {
+                            println!("Warning: Failed to unmute audio: {}", e);
+                        }
+                    } // audio_system is dropped here
+
+                    // Read cached shared settings, append app, and save back
+                    let updated_settings = {
+                        let mut shared_settings = SHARED_SETTINGS.lock().await;
+                        if !shared_settings.ignored_apps_list.contains(&app_name) {
+                            shared_settings.ignored_apps_list.push(app_name.clone());
+                        }
+                        shared_settings.clone()
+                    };
+
+                    // Save ignored apps to global settings
+                    let global = GlobalPluginSettings {
+                        ignored_apps_list: updated_settings.ignored_apps_list.clone(),
+                    };
+                    let _ = set_global_settings(global).await;
+
+                    // Broadcast to ALL instances (including this one)
+                    for inst in visible_instances(Self::UUID).await {
+                        let _ = inst.set_settings(&updated_settings).await;
+                    }
+
+                    println!("Added {} to ignored apps list and broadcast to all instances", app_name);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn key_down(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
+        let mut press_control = BUTTON_PRESS_CONTROL.lock().await;
+        press_control.set_press_time(instance.instance_id.clone());
+        drop(press_control); // Release lock early
+
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
         let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
-        let coords = instance.coordinates.expect("coordinates must be present");
 
         let sd_column = coords.column;
 
@@ -117,11 +293,11 @@ impl Action for VolumeControllerAction {
                 0 => {
                     channel.mute = !channel.mute;
                     let mut audio_system = audio::create();
-                    audio_system
-                        .mute_volume(channel.uid, channel.mute, channel.is_device)
-                        .expect("Failed to mute");
-
-                    println!("Muting app {}", channel.app_name);
+                    if let Err(e) = audio_system.mute_volume(channel.uid, channel.mute, channel.is_device) {
+                        println!("Warning: Failed to toggle mute for {}: {}", channel.app_name, e);
+                    } else {
+                        println!("Muting app {}", channel.app_name);
+                    }
                 }
                 1 => {
                     let app_uid = channel.uid;
@@ -131,26 +307,26 @@ impl Action for VolumeControllerAction {
                     }
 
                     let mut audio_system = audio::create();
-                    audio_system
-                        .increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
-                        .expect("Failed to increase volume");
-
-                    println!(
-                        "Volume up in app {} {}",
-                        channel.app_name, channel.vol_percent
-                    );
+                    if let Err(e) = audio_system.increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device) {
+                        println!("Warning: Failed to increase volume for {}: {}", channel.app_name, e);
+                    } else {
+                        println!(
+                            "Volume up in app {} {}",
+                            channel.app_name, channel.vol_percent
+                        );
+                    }
                 }
                 2 => {
                     let app_uid = channel.uid;
                     let mut audio_system = audio::create();
-                    audio_system
-                        .decrease_volume(app_uid, VOLUME_INCREMENT, channel.is_device)
-                        .expect("Failed to decrease volume");
-
-                    println!(
-                        "Volume down in app {} {}",
-                        channel.app_name, channel.vol_percent
-                    );
+                    if let Err(e) = audio_system.decrease_volume(app_uid, VOLUME_INCREMENT, channel.is_device) {
+                        println!("Warning: Failed to decrease volume for {}: {}", channel.app_name, e);
+                    } else {
+                        println!(
+                            "Volume down in app {} {}",
+                            channel.app_name, channel.vol_percent
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -162,18 +338,23 @@ impl Action for VolumeControllerAction {
 
 pub async fn init() -> OpenActionResult<()> {
     println!("Stream Deck connected - starting PulseAudio monitoring");
+
     // start listening to changes
     audio::pulse::start_pulse_monitoring();
 
-    // create initial map
+    // create initial map (ignored apps will be loaded via did_receive_global_settings)
     let applications = {
         let mut audio_system = create();
         audio_system
             .list_applications()
             .expect("Error fetching applications from SinkController")
     };
-    mixer::create_mixer_channels(applications).await;
 
+    let ignored_apps = SHARED_SETTINGS.lock().await.ignored_apps_list.clone();
+    mixer::create_mixer_channels(applications, &ignored_apps).await;
+
+    // Register global event handler and action
+    set_global_event_handler(&GlobalHandler);
     register_action(VolumeControllerAction).await;
 
     run(std::env::args().collect()).await

@@ -2,6 +2,7 @@ use openaction::{Action, Instance, visible_instances};
 use tux_icons::icon_fetcher::IconFetcher;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::gfx::TRANSPARENT_ICON;
 use crate::mixer::{self, MixerChannel};
@@ -11,6 +12,45 @@ const MAX_TITLE_CHARS_BEFORE_TRUNCATION: usize = 8;
 
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
+
+pub struct ButtonPressControl {
+    pub action_id: Option<String>,
+    time_ms: Option<u128>,
+}
+
+impl ButtonPressControl {
+    pub fn new() -> Self {
+        ButtonPressControl {
+            action_id: None,
+            time_ms: None,
+        }
+    }
+
+    pub fn set_press_time(&mut self, action_id: String) {
+        self.action_id = Some(action_id);
+        self.time_ms = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        );
+    }
+
+    pub fn get_release_time(&mut self) -> Option<u128> {
+        self.action_id.as_ref()?;
+        self.action_id = None;
+
+        if let Some(press_time) = self.time_ms.take() {
+            let release_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let duration = release_time - press_time;
+            return Some(duration);
+        }
+        None
+    }
+}
 
 // Public getter for the global show_system_mixer flag
 pub fn should_show_system_mixer() -> bool {
@@ -30,7 +70,8 @@ pub async fn get_device_row_count() -> Option<u8> {
 
     let max_row = instances
         .iter()
-        .map(|i| i.coordinates.expect("coordinates must be present").row)
+        .filter_map(|i| i.coordinates.as_ref())
+        .map(|coords| coords.row)
         .max()?;
 
     Some(max_row + 1)
@@ -42,7 +83,9 @@ pub async fn update_stream_deck_buttons() {
     let row_count = get_device_row_count().await;
 
     for instance in visible_instances(VolumeControllerAction::UUID).await {
-        let coords = instance.coordinates.expect("coordinates must be present");
+        let Some(coords) = instance.coordinates else {
+            continue;
+        };
         let sd_column = coords.column;
 
         let Some(&channel_index) = column_map.get(&sd_column) else {
@@ -54,7 +97,7 @@ pub async fn update_stream_deck_buttons() {
                 if rows >= 3 {
                     cleanup_sd_column(&instance).await;
                 } else {
-                    // TODO check if there are knobs too and call appropiate cleanup fn
+                    // TODO check if there are knobs/dials too and call appropriate cleanup fn
                     // update_sd_column_with_knob(&instance).await;
                 }
             }
@@ -72,7 +115,7 @@ pub async fn update_stream_deck_buttons() {
             if rows >= 3 {
                 update_sd_column(channel, &instance).await;
             } else {
-                // TODO same logic as in cleanup for knobs
+                // TODO same logic as in cleanup for knobs/dials (appropriate update fn)
                 // update_sd_column_with_knob(&instance).await;
             }
         }
@@ -96,7 +139,9 @@ pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
                     if name.len() > MAX_TITLE_CHARS_BEFORE_TRUNCATION {
                         format!(
                             "{}...",
-                            name.chars().take(MAX_TITLE_CHARS_BEFORE_TRUNCATION).collect::<String>()
+                            name.chars()
+                                .take(MAX_TITLE_CHARS_BEFORE_TRUNCATION)
+                                .collect::<String>()
                         )
                     } else {
                         name.clone()
@@ -211,7 +256,9 @@ fn add_grayscale_filter_to_svg(svg: String) -> String {
 }
 
 async fn update_sd_column(channel: &MixerChannel, instance: &Instance) {
-    let coords = instance.coordinates.expect("coordinates must be present");
+    let Some(coords) = instance.coordinates else {
+        return;
+    };
 
     match coords.row {
         0 => {

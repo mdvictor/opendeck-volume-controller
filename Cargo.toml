@@ -1,11 +1,11 @@
 [package]
 name = "oa-volume-controller"
-version = "1.0.3"
+version = "1.1.0"
 edition = "2024"
 
 [dependencies]
 pulsectl-rs = "0.3"
-openaction = "2.2.0"
+openaction = "2.5.0"
 tokio = { version = "1.45", features = ["full"] }
 log = "0.4"
 simplelog = "0.12"
