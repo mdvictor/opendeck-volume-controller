@@ -1,4 +1,6 @@
 use openaction::*;
+use openaction::global_events::{GlobalEventHandler, DidReceiveGlobalSettingsEvent, set_global_event_handler};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -26,6 +28,46 @@ pub static SHARED_SETTINGS: LazyLock<Mutex<VolumeControllerSettings>> =
 pub struct VolumeControllerSettings {
     pub show_sys_mixer: bool,
     pub ignored_apps_list: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct GlobalPluginSettings {
+    pub ignored_apps_list: Vec<String>,
+}
+
+pub struct GlobalHandler;
+
+#[async_trait]
+impl GlobalEventHandler for GlobalHandler {
+    async fn plugin_ready(&self) -> OpenActionResult<()> {
+        // Request global settings on startup so ignored_apps_list is loaded
+        let _ = get_global_settings().await;
+        Ok(())
+    }
+
+    async fn did_receive_global_settings(&self, event: DidReceiveGlobalSettingsEvent) -> OpenActionResult<()> {
+        let global: GlobalPluginSettings = serde_json::from_value(event.payload.settings)
+            .unwrap_or_default();
+
+        println!("did_receive_global_settings: {} ignored apps", global.ignored_apps_list.len());
+
+        let mut shared = SHARED_SETTINGS.lock().await;
+        if shared.ignored_apps_list != global.ignored_apps_list {
+            shared.ignored_apps_list = global.ignored_apps_list.clone();
+            drop(shared);
+
+            // Sync ignored_apps_list into all instance settings
+            let current = SHARED_SETTINGS.lock().await.clone();
+            for inst in visible_instances(VolumeControllerAction::UUID).await {
+                let _ = inst.set_settings(&current).await;
+            }
+
+            let _ = refresh_audio_applications().await;
+        }
+
+        Ok(())
+    }
 }
 
 pub struct VolumeControllerAction;
@@ -58,25 +100,19 @@ impl Action for VolumeControllerAction {
         instance: &Instance,
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        println!("did_receive_settings for instance {}: show_sys_mixer={}, ignored_apps={:?}",
-            instance.instance_id, settings.show_sys_mixer, settings.ignored_apps_list);
+        println!("did_receive_settings for instance {}: show_sys_mixer={}",
+            instance.instance_id, settings.show_sys_mixer);
 
-        // Check if settings actually changed to avoid infinite loops
+        // Check if show_sys_mixer changed to avoid infinite loops
         let mut cached = SHARED_SETTINGS.lock().await;
-        let settings_changed = cached.show_sys_mixer != settings.show_sys_mixer
-            || cached.ignored_apps_list != settings.ignored_apps_list;
+        let settings_changed = cached.show_sys_mixer != settings.show_sys_mixer;
 
         if settings_changed {
             println!("Settings changed, broadcasting to all instances");
-            *cached = settings.clone();
+            cached.show_sys_mixer = settings.show_sys_mixer;
             drop(cached);
 
-            // Save ignored apps to file
-            if let Err(e) = utils::save_ignored_apps(&settings.ignored_apps_list) {
-                println!("Warning: Failed to save ignored apps: {}", e);
-            }
-
-            // Broadcast settings to all instances so they all stay in sync
+            // Broadcast show_sys_mixer to all other instances
             for inst in visible_instances(Self::UUID).await {
                 if inst.instance_id != instance.instance_id {
                     println!("Broadcasting to instance {}", inst.instance_id);
@@ -213,10 +249,11 @@ impl Action for VolumeControllerAction {
                         shared_settings.clone()
                     };
 
-                    // Save ignored apps to file
-                    if let Err(e) = utils::save_ignored_apps(&updated_settings.ignored_apps_list) {
-                        println!("Warning: Failed to save ignored apps: {}", e);
-                    }
+                    // Save ignored apps to global settings
+                    let global = GlobalPluginSettings {
+                        ignored_apps_list: updated_settings.ignored_apps_list.clone(),
+                    };
+                    let _ = set_global_settings(global).await;
 
                     // Broadcast to ALL instances (including this one)
                     for inst in visible_instances(Self::UUID).await {
@@ -302,18 +339,10 @@ impl Action for VolumeControllerAction {
 pub async fn init() -> OpenActionResult<()> {
     println!("Stream Deck connected - starting PulseAudio monitoring");
 
-    // Load ignored apps from file and populate shared settings
-    let loaded_ignored_apps = utils::load_ignored_apps();
-    {
-        let mut settings = SHARED_SETTINGS.lock().await;
-        settings.ignored_apps_list = loaded_ignored_apps.clone();
-        println!("Initialized with {} ignored apps from file", loaded_ignored_apps.len());
-    }
-
     // start listening to changes
     audio::pulse::start_pulse_monitoring();
 
-    // create initial map
+    // create initial map (ignored apps will be loaded via did_receive_global_settings)
     let applications = {
         let mut audio_system = create();
         audio_system
@@ -321,9 +350,11 @@ pub async fn init() -> OpenActionResult<()> {
             .expect("Error fetching applications from SinkController")
     };
 
-    mixer::create_mixer_channels(applications, &loaded_ignored_apps).await;
+    let ignored_apps = SHARED_SETTINGS.lock().await.ignored_apps_list.clone();
+    mixer::create_mixer_channels(applications, &ignored_apps).await;
 
-    // Register action
+    // Register global event handler and action
+    set_global_event_handler(&GlobalHandler);
     register_action(VolumeControllerAction).await;
 
     run(std::env::args().collect()).await

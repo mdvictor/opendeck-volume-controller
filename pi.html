@@ -21,13 +21,20 @@
                             uuid: inPropertyInspectorUUID,
                         }),
                     );
+                    // Request global settings to load ignored apps list
+                    websocket.send(
+                        JSON.stringify({
+                            event: "getGlobalSettings",
+                            context: inPropertyInspectorUUID,
+                        }),
+                    );
                 };
 
                 const showSysMixer = document.getElementById("show_sys_mixer");
                 showSysMixer.checked =
                     inActionInfo.payload.settings.show_sys_mixer ?? false;
 
-                let ignoredAppsList = inActionInfo.payload.settings.ignored_apps_list ?? [];
+                let ignoredAppsList = [];
 
                 const renderIgnoredApps = () => {
                     const container = document.getElementById("ignored_apps_list");
@@ -54,7 +61,7 @@
                             const index = parseInt(e.target.getAttribute("data-index"));
                             ignoredAppsList.splice(index, 1);
                             renderIgnoredApps();
-                            update();
+                            updateGlobal();
                         });
                     });
                 };
@@ -68,9 +75,23 @@
                         console.log("Updating PI with settings:", data.payload.settings);
                         showSysMixer.checked =
                             data.payload.settings.show_sys_mixer ?? false;
+                    } else if (data.event == "didReceiveGlobalSettings") {
+                        console.log("Updating PI with global settings:", data.payload.settings);
                         ignoredAppsList = data.payload.settings.ignored_apps_list ?? [];
                         renderIgnoredApps();
                     }
+                };
+
+                const updateGlobal = () => {
+                    websocket.send(
+                        JSON.stringify({
+                            event: "setGlobalSettings",
+                            context: inPropertyInspectorUUID,
+                            payload: {
+                                ignored_apps_list: ignoredAppsList,
+                            },
+                        }),
+                    );
                 };
 
                 update = () => {
@@ -80,7 +101,6 @@
                             context: inActionInfo.context,
                             payload: {
                                 show_sys_mixer: showSysMixer.checked,
-                                ignored_apps_list: ignoredAppsList,
                             },
                         }),
                     );
