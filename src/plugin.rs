@@ -12,8 +12,11 @@ use crate::{
 use std::{collections::HashMap, sync::LazyLock};
 use tokio::sync::Mutex;
 
-/// Volume adjustment applied per key press / dial tick, in percentage points.
-const VOLUME_STEP_PERCENT: f32 = 10.0;
+/// Default volume adjustment applied per key press / dial tick, in
+/// percentage points, until the user configures a different `volume_step`.
+fn default_volume_step() -> f32 {
+    5.0
+}
 
 pub static COLUMN_TO_CHANNEL_MAP: LazyLock<Mutex<HashMap<(ControllerKind, u8), u8>>> =
     LazyLock::new(|| Mutex::const_new(HashMap::new()));
@@ -24,11 +27,35 @@ pub static BUTTON_PRESS_CONTROL: LazyLock<Mutex<ButtonPressControl>> =
 pub static SHARED_SETTINGS: LazyLock<Mutex<VolumeControllerSettings>> =
     LazyLock::new(|| Mutex::const_new(VolumeControllerSettings::default()));
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct VolumeControllerSettings {
     pub show_sys_mixer: bool,
     pub ignored_apps_list: Vec<String>,
+    /// Volume adjustment applied per key press / dial tick, in percentage points.
+    pub volume_step: f32,
+}
+
+impl Default for VolumeControllerSettings {
+    fn default() -> Self {
+        Self {
+            show_sys_mixer: false,
+            ignored_apps_list: Vec::new(),
+            volume_step: default_volume_step(),
+        }
+    }
+}
+
+impl VolumeControllerSettings {
+    /// `volume_step`, guarding against 0/negative/garbage values that could
+    /// come from the property inspector or a stale settings payload.
+    fn volume_step_or_default(&self) -> f32 {
+        if self.volume_step > 0.0 {
+            self.volume_step
+        } else {
+            default_volume_step()
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -101,24 +128,29 @@ impl Action for VolumeControllerAction {
         instance: &Instance,
         settings: &Self::Settings,
     ) -> OpenActionResult<()> {
-        println!("did_receive_settings for instance {}: show_sys_mixer={}",
-            instance.instance_id, settings.show_sys_mixer);
+        let volume_step = settings.volume_step_or_default();
 
-        // Check if show_sys_mixer changed to avoid infinite loops
+        println!(
+            "did_receive_settings for instance {}: show_sys_mixer={} volume_step={}",
+            instance.instance_id, settings.show_sys_mixer, volume_step
+        );
+
+        // Check if any shared setting changed to avoid infinite broadcast loops
         let mut cached = SHARED_SETTINGS.lock().await;
-        let settings_changed = cached.show_sys_mixer != settings.show_sys_mixer;
+        let settings_changed =
+            cached.show_sys_mixer != settings.show_sys_mixer || cached.volume_step != volume_step;
 
         if settings_changed {
             println!("Settings changed, broadcasting to all instances");
             cached.show_sys_mixer = settings.show_sys_mixer;
+            cached.volume_step = volume_step;
+            let normalized = cached.clone();
             drop(cached);
 
-            // Broadcast show_sys_mixer to all other instances
+            // Broadcast the shared settings to every instance (including this
+            // one, in case volume_step was clamped above)
             for inst in visible_instances(Self::UUID).await {
-                if inst.instance_id != instance.instance_id {
-                    println!("Broadcasting to instance {}", inst.instance_id);
-                    let _ = inst.set_settings(settings).await;
-                }
+                let _ = inst.set_settings(&normalized).await;
             }
 
             // Apply show_sys_mixer setting
@@ -235,7 +267,7 @@ impl Action for VolumeControllerAction {
         Ok(())
     }
 
-    async fn key_down(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
+    async fn key_down(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
         let mut press_control = BUTTON_PRESS_CONTROL.lock().await;
         press_control.set_press_time(instance.instance_id.clone());
         drop(press_control); // Release lock early
@@ -245,10 +277,12 @@ impl Action for VolumeControllerAction {
             return Ok(());
         };
 
+        let step = settings.volume_step_or_default();
+
         match coords.row {
             0 => toggle_mute_for_column(ControllerKind::Keypad, coords.column).await,
-            1 => adjust_volume_for_column(ControllerKind::Keypad, coords.column, VOLUME_STEP_PERCENT).await,
-            2 => adjust_volume_for_column(ControllerKind::Keypad, coords.column, -VOLUME_STEP_PERCENT).await,
+            1 => adjust_volume_for_column(ControllerKind::Keypad, coords.column, step).await,
+            2 => adjust_volume_for_column(ControllerKind::Keypad, coords.column, -step).await,
             _ => {}
         }
 
@@ -258,7 +292,7 @@ impl Action for VolumeControllerAction {
     async fn dial_rotate(
         &self,
         instance: &Instance,
-        _settings: &Self::Settings,
+        settings: &Self::Settings,
         ticks: i16,
         _pressed: bool,
     ) -> OpenActionResult<()> {
@@ -271,7 +305,8 @@ impl Action for VolumeControllerAction {
             return Ok(());
         };
 
-        let delta = VOLUME_STEP_PERCENT * ticks as f32;
+        let step = settings.volume_step_or_default();
+        let delta = step * ticks as f32;
         adjust_volume_for_column(ControllerKind::Encoder, coords.column, delta).await;
 
         Ok(())
