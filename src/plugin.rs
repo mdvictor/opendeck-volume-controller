@@ -7,14 +7,15 @@ use crate::{
     audio::{self, pulse::pulse_monitor::refresh_audio_applications, *},
     gfx::{self},
     mixer,
-    utils::{self, ButtonPressControl},
+    utils::{self, ButtonPressControl, ControllerKind},
 };
 use std::{collections::HashMap, sync::LazyLock};
 use tokio::sync::Mutex;
 
-const VOLUME_INCREMENT: f64 = 0.1;
+/// Volume adjustment applied per key press / dial tick, in percentage points.
+const VOLUME_STEP_PERCENT: f32 = 10.0;
 
-pub static COLUMN_TO_CHANNEL_MAP: LazyLock<Mutex<HashMap<u8, u8>>> =
+pub static COLUMN_TO_CHANNEL_MAP: LazyLock<Mutex<HashMap<(ControllerKind, u8), u8>>> =
     LazyLock::new(|| Mutex::const_new(HashMap::new()));
 
 pub static BUTTON_PRESS_CONTROL: LazyLock<Mutex<ButtonPressControl>> =
@@ -90,7 +91,7 @@ impl Action for VolumeControllerAction {
         };
 
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
-        column_map.remove(&coords.column);
+        column_map.remove(&(ControllerKind::of(instance), coords.column));
 
         Ok(())
     }
@@ -142,14 +143,16 @@ impl Action for VolumeControllerAction {
             return Ok(());
         };
 
+        let controller = ControllerKind::of(instance);
+
         let mut column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
         let mut channels = mixer::MIXER_CHANNELS.lock().await;
 
-        let sd_column = coords.column;
+        let key = (controller, coords.column);
 
         // Calculate next index before entry() call to avoid borrow checker issue
         let next_index = column_map.len() as u8;
-        let channel_index = *column_map.entry(sd_column).or_insert(next_index);
+        let channel_index = *column_map.entry(key).or_insert(next_index);
 
         let channel = match channels.get_mut(&channel_index) {
             Some(ch) => ch,
@@ -159,27 +162,33 @@ impl Action for VolumeControllerAction {
             }
         };
 
-        match coords.row {
-            0 => {
-                utils::update_header(instance, channel).await;
-                channel.header_id = Some(instance.instance_id.clone());
+        match controller {
+            ControllerKind::Encoder => {
+                channel.encoder_id = Some(instance.instance_id.clone());
+                utils::update_encoder_feedback(channel, instance).await;
             }
-            1 | 2 => {
-                if let Ok((upper_img, lower_img)) =
-                    gfx::get_volume_bar_data_uri_split(channel.vol_percent)
-                {
-                    let img;
-                    if coords.row == 1 {
-                        channel.upper_vol_btn_id = Some(instance.instance_id.clone());
-                        img = upper_img;
-                    } else {
-                        channel.lower_vol_btn_id = Some(instance.instance_id.clone());
-                        img = lower_img;
-                    };
-                    instance.set_image(Some(img), None).await?;
+            ControllerKind::Keypad => match coords.row {
+                0 => {
+                    utils::update_header(instance, channel).await;
+                    channel.header_id = Some(instance.instance_id.clone());
                 }
-            }
-            _ => {} // Ignore other rows
+                1 | 2 => {
+                    if let Ok((upper_img, lower_img)) =
+                        gfx::get_volume_bar_data_uri_split(channel.vol_percent)
+                    {
+                        let img;
+                        if coords.row == 1 {
+                            channel.upper_vol_btn_id = Some(instance.instance_id.clone());
+                            img = upper_img;
+                        } else {
+                            channel.lower_vol_btn_id = Some(instance.instance_id.clone());
+                            img = lower_img;
+                        };
+                        instance.set_image(Some(img), None).await?;
+                    }
+                }
+                _ => {} // Ignore other rows
+            },
         }
 
         Ok(())
@@ -211,56 +220,14 @@ impl Action for VolumeControllerAction {
                 println!("Warning: Instance {} has no coordinates", instance.instance_id);
                 return Ok(());
             };
-            let sd_column = coords.column;
 
             if duration_ms > 1000 && coords.row == 0 {
                 let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
-                let mut channels = mixer::MIXER_CHANNELS.lock().await;
+                let channel_index = column_map.get(&(ControllerKind::Keypad, coords.column)).copied();
+                drop(column_map);
 
-                // Look up the channel index for this SD column
-                let Some(&channel_index) = column_map.get(&sd_column) else {
-                    return Ok(());
-                };
-
-                if let Some(channel) = channels.get_mut(&channel_index) {
-                    let app_name = channel.app_name.clone();
-                    let uid = channel.uid;
-                    let is_device = channel.is_device;
-
-                    channel.mute = false;
-
-                    // Drop locks before potentially blocking operations
-                    drop(channels);
-                    drop(column_map);
-
-                    {
-                        let mut audio_system = audio::create();
-                        if let Err(e) = audio_system.mute_volume(uid, false, is_device) {
-                            println!("Warning: Failed to unmute audio: {}", e);
-                        }
-                    } // audio_system is dropped here
-
-                    // Read cached shared settings, append app, and save back
-                    let updated_settings = {
-                        let mut shared_settings = SHARED_SETTINGS.lock().await;
-                        if !shared_settings.ignored_apps_list.contains(&app_name) {
-                            shared_settings.ignored_apps_list.push(app_name.clone());
-                        }
-                        shared_settings.clone()
-                    };
-
-                    // Save ignored apps to global settings
-                    let global = GlobalPluginSettings {
-                        ignored_apps_list: updated_settings.ignored_apps_list.clone(),
-                    };
-                    let _ = set_global_settings(global).await;
-
-                    // Broadcast to ALL instances (including this one)
-                    for inst in visible_instances(Self::UUID).await {
-                        let _ = inst.set_settings(&updated_settings).await;
-                    }
-
-                    println!("Added {} to ignored apps list and broadcast to all instances", app_name);
+                if let Some(channel_index) = channel_index {
+                    ignore_current_app(channel_index).await;
                 }
             }
         }
@@ -278,62 +245,193 @@ impl Action for VolumeControllerAction {
             return Ok(());
         };
 
-        let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
-        let mut channels = mixer::MIXER_CHANNELS.lock().await;
-
-        let sd_column = coords.column;
-
-        // Look up the channel index for this SD column
-        let Some(&channel_index) = column_map.get(&sd_column) else {
-            return Ok(());
-        };
-
-        if let Some(channel) = channels.get_mut(&channel_index) {
-            match coords.row {
-                0 => {
-                    channel.mute = !channel.mute;
-                    let mut audio_system = audio::create();
-                    if let Err(e) = audio_system.mute_volume(channel.uid, channel.mute, channel.is_device) {
-                        println!("Warning: Failed to toggle mute for {}: {}", channel.app_name, e);
-                    } else {
-                        println!("Muting app {}", channel.app_name);
-                    }
-                }
-                1 => {
-                    let app_uid = channel.uid;
-
-                    if channel.vol_percent >= 100.0 {
-                        return Ok(());
-                    }
-
-                    let mut audio_system = audio::create();
-                    if let Err(e) = audio_system.increase_volume(app_uid, VOLUME_INCREMENT, channel.is_device) {
-                        println!("Warning: Failed to increase volume for {}: {}", channel.app_name, e);
-                    } else {
-                        println!(
-                            "Volume up in app {} {}",
-                            channel.app_name, channel.vol_percent
-                        );
-                    }
-                }
-                2 => {
-                    let app_uid = channel.uid;
-                    let mut audio_system = audio::create();
-                    if let Err(e) = audio_system.decrease_volume(app_uid, VOLUME_INCREMENT, channel.is_device) {
-                        println!("Warning: Failed to decrease volume for {}: {}", channel.app_name, e);
-                    } else {
-                        println!(
-                            "Volume down in app {} {}",
-                            channel.app_name, channel.vol_percent
-                        );
-                    }
-                }
-                _ => {}
-            }
+        match coords.row {
+            0 => toggle_mute_for_column(ControllerKind::Keypad, coords.column).await,
+            1 => adjust_volume_for_column(ControllerKind::Keypad, coords.column, VOLUME_STEP_PERCENT).await,
+            2 => adjust_volume_for_column(ControllerKind::Keypad, coords.column, -VOLUME_STEP_PERCENT).await,
+            _ => {}
         }
 
         Ok(())
     }
+
+    async fn dial_rotate(
+        &self,
+        instance: &Instance,
+        _settings: &Self::Settings,
+        ticks: i16,
+        _pressed: bool,
+    ) -> OpenActionResult<()> {
+        if ticks == 0 {
+            return Ok(());
+        }
+
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
+        let delta = VOLUME_STEP_PERCENT * ticks as f32;
+        adjust_volume_for_column(ControllerKind::Encoder, coords.column, delta).await;
+
+        Ok(())
+    }
+
+    async fn dial_down(&self, instance: &Instance, _: &Self::Settings) -> OpenActionResult<()> {
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
+        toggle_mute_for_column(ControllerKind::Encoder, coords.column).await;
+
+        Ok(())
+    }
+
+    async fn touch_tap(
+        &self,
+        instance: &Instance,
+        _settings: &Self::Settings,
+        _position: (u16, u16),
+        hold: bool,
+    ) -> OpenActionResult<()> {
+        let Some(coords) = instance.coordinates else {
+            println!("Warning: Instance {} has no coordinates", instance.instance_id);
+            return Ok(());
+        };
+
+        if hold {
+            // Long touch: add the app to the ignored list, mirroring the Keypad long-press gesture
+            let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
+            let channel_index = column_map.get(&(ControllerKind::Encoder, coords.column)).copied();
+            drop(column_map);
+
+            if let Some(channel_index) = channel_index {
+                ignore_current_app(channel_index).await;
+            }
+        } else {
+            // Short tap: toggle mute, same as pressing the dial
+            toggle_mute_for_column(ControllerKind::Encoder, coords.column).await;
+        }
+
+        Ok(())
+    }
+}
+
+/// Apply the same absolute volume to every stream in a group, so all members
+/// of a multi-stream app stay in sync instead of drifting apart.
+async fn apply_group_volume(member_uids: &[u32], target_percent: f32, is_device: bool, app_name: &str) {
+    let mut audio_system = audio::create();
+    for &uid in member_uids {
+        if let Err(e) = audio_system.set_volume(uid, target_percent, is_device) {
+            println!("Warning: Failed to set volume for {}: {}", app_name, e);
+        }
+    }
+}
+
+/// Apply the same mute state to every stream in a group at once.
+async fn apply_group_mute(member_uids: &[u32], mute: bool, is_device: bool, app_name: &str) {
+    let mut audio_system = audio::create();
+    for &uid in member_uids {
+        if let Err(e) = audio_system.mute_volume(uid, mute, is_device) {
+            println!("Warning: Failed to toggle mute for {}: {}", app_name, e);
+        }
+    }
+}
+
+/// Look up the channel bound to `column` on the given controller, adjust its
+/// volume by `delta` percentage points (clamped to 0-100), and push that to
+/// every stream in the group.
+async fn adjust_volume_for_column(controller: ControllerKind, column: u8, delta: f32) {
+    let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
+    let channel_index = column_map.get(&(controller, column)).copied();
+    drop(column_map);
+
+    let Some(channel_index) = channel_index else {
+        return;
+    };
+
+    let mut channels = mixer::MIXER_CHANNELS.lock().await;
+    let Some(channel) = channels.get_mut(&channel_index) else {
+        return;
+    };
+
+    let target = (channel.vol_percent + delta).clamp(0.0, 100.0);
+    let member_uids = channel.member_uids.clone();
+    let is_device = channel.is_device;
+    let app_name = channel.app_name.clone();
+    drop(channels);
+
+    apply_group_volume(&member_uids, target, is_device, &app_name).await;
+    println!("Volume for {} -> {:.0}%", app_name, target);
+}
+
+/// Look up the channel bound to `column` on the given controller, flip its
+/// mute state, and push that to every stream in the group at once.
+async fn toggle_mute_for_column(controller: ControllerKind, column: u8) {
+    let column_map = COLUMN_TO_CHANNEL_MAP.lock().await;
+    let channel_index = column_map.get(&(controller, column)).copied();
+    drop(column_map);
+
+    let Some(channel_index) = channel_index else {
+        return;
+    };
+
+    let mut channels = mixer::MIXER_CHANNELS.lock().await;
+    let Some(channel) = channels.get_mut(&channel_index) else {
+        return;
+    };
+
+    channel.mute = !channel.mute;
+    let member_uids = channel.member_uids.clone();
+    let is_device = channel.is_device;
+    let mute = channel.mute;
+    let app_name = channel.app_name.clone();
+    drop(channels);
+
+    apply_group_mute(&member_uids, mute, is_device, &app_name).await;
+    println!("Muting app {} = {}", app_name, mute);
+}
+
+/// Unmute and add the app in `channel_index` to the ignored apps list, then
+/// broadcast the updated list to global settings and every visible instance.
+/// Shared by the Keypad long-press and the Encoder long-touch gestures.
+async fn ignore_current_app(channel_index: u8) {
+    let mut channels = mixer::MIXER_CHANNELS.lock().await;
+    let Some(channel) = channels.get_mut(&channel_index) else {
+        return;
+    };
+
+    let app_name = channel.app_name.clone();
+    let member_uids = channel.member_uids.clone();
+    let is_device = channel.is_device;
+
+    channel.mute = false;
+    drop(channels);
+
+    apply_group_mute(&member_uids, false, is_device, &app_name).await;
+
+    // Read cached shared settings, append app, and save back
+    let updated_settings = {
+        let mut shared_settings = SHARED_SETTINGS.lock().await;
+        if !shared_settings.ignored_apps_list.contains(&app_name) {
+            shared_settings.ignored_apps_list.push(app_name.clone());
+        }
+        shared_settings.clone()
+    };
+
+    // Save ignored apps to global settings
+    let global = GlobalPluginSettings {
+        ignored_apps_list: updated_settings.ignored_apps_list.clone(),
+    };
+    let _ = set_global_settings(global).await;
+
+    // Broadcast to ALL instances (including this one)
+    for inst in visible_instances(VolumeControllerAction::UUID).await {
+        let _ = inst.set_settings(&updated_settings).await;
+    }
+
+    println!("Added {} to ignored apps list and broadcast to all instances", app_name);
 }
 
 pub async fn init() -> OpenActionResult<()> {

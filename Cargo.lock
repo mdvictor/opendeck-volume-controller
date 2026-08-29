@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "oa-volume-controller"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -808,9 +808,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openaction"
-version = "2.6.0"
+version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14fef1b3f886c87c86633bf200062c4e56e48b12b8c49d35beab29ad0c49b66b"
+checksum = "dc341c5cf8cc8953582dbf6fcf6423b335b8b104ef07e6ca7e580ad3a2d68f98"
 dependencies = [
  "async-trait",
  "dashmap",

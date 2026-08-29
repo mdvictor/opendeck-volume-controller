@@ -8,16 +8,18 @@ pub struct MixerChannel {
     pub header_id: Option<String>,
     pub upper_vol_btn_id: Option<String>,
     pub lower_vol_btn_id: Option<String>,
-    pub uid: u32,
+    pub encoder_id: Option<String>,
+    /// PulseAudio sink-input (or device) uids this channel controls together.
+    /// More than one when several streams from the same app instance (same
+    /// name + PID) were grouped into a single channel.
+    pub member_uids: Vec<u32>,
     pub app_name: String,
-    pub sink_name: Option<String>,
     pub mute: bool,
     pub vol_percent: f32,
     pub icon_uri: String,
     pub icon_uri_mute: String,
     pub uses_default_icon: bool,
     pub is_device: bool,
-    pub is_multi_sink_app: bool,
 }
 
 pub static MIXER_CHANNELS: LazyLock<Mutex<HashMap<u8, MixerChannel>>> =
@@ -45,16 +47,15 @@ pub async fn create_mixer_channels(
                 header_id: None,
                 upper_vol_btn_id: None,
                 lower_vol_btn_id: None,
-                uid: app.uid,
+                encoder_id: None,
+                member_uids: app.member_uids,
                 app_name: app.app_name.clone(),
-                sink_name: app.sink_name.clone(),
                 mute: app.mute,
                 vol_percent: app.vol_percent,
                 icon_uri,
                 icon_uri_mute,
                 uses_default_icon,
                 is_device: app.is_device,
-                is_multi_sink_app: app.is_multi_sink_app,
             },
         );
 
@@ -77,16 +78,14 @@ pub async fn update_mixer_channels(
 
         if let Some(channel) = channels.get_mut(&col_key) {
             // Check if we need to update the channel
-            let needs_update = channel.uid != app.uid
+            let needs_update = channel.member_uids != app.member_uids
                 || channel.app_name != app.app_name
-                || channel.sink_name != app.sink_name
                 || channel.mute != app.mute
                 || (channel.vol_percent - app.vol_percent).abs() > 0.01
-                || channel.is_device != app.is_device
-                || channel.is_multi_sink_app != app.is_multi_sink_app;
+                || channel.is_device != app.is_device;
 
             if needs_update {
-                if channel.uid != app.uid {
+                if channel.member_uids != app.member_uids {
                     let (icon_uri, icon_uri_mute, uses_default_icon) =
                         get_app_icon_uri(app.icon_name, app.app_name.clone());
                     channel.icon_uri = icon_uri;
@@ -95,13 +94,11 @@ pub async fn update_mixer_channels(
                 }
 
                 // Update the channel data
-                channel.uid = app.uid;
+                channel.member_uids = app.member_uids;
                 channel.app_name = app.app_name;
-                channel.sink_name = app.sink_name;
                 channel.mute = app.mute;
                 channel.vol_percent = app.vol_percent;
                 channel.is_device = app.is_device;
-                channel.is_multi_sink_app = app.is_multi_sink_app;
             }
         } else {
             // Insert new channel if it doesn't exist
@@ -114,16 +111,15 @@ pub async fn update_mixer_channels(
                     header_id: None,
                     upper_vol_btn_id: None,
                     lower_vol_btn_id: None,
-                    uid: app.uid,
+                    encoder_id: None,
+                    member_uids: app.member_uids,
                     app_name: app.app_name,
-                    sink_name: app.sink_name,
                     mute: app.mute,
                     vol_percent: app.vol_percent,
                     icon_uri,
                     icon_uri_mute,
                     uses_default_icon,
                     is_device: app.is_device,
-                    is_multi_sink_app: app.is_multi_sink_app,
                 },
             );
         }
