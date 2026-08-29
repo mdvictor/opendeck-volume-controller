@@ -21,6 +21,33 @@ pub static TRANSPARENT_ICON: LazyLock<String> = LazyLock::new(|| {
     format!("data:image/png;base64,{}", base64)
 });
 
+/// Faded, grayscale version of the default app icon, shown on a dial's
+/// touchscreen segment when no app is assigned to it (e.g. fewer running
+/// apps than dial slots on the device). Signals "waiting for an app"
+/// without drawing attention the way a fully transparent segment would.
+pub static DIAL_IDLE_ICON: LazyLock<String> = LazyLock::new(|| {
+    const IDLE_OPACITY: f32 = 0.35;
+
+    let image_data = include_bytes!("../img/wave-sound.png");
+    let img = image::load_from_memory(image_data).expect("Failed to decode wave-sound.png");
+    let mut faded = img.to_rgba8();
+
+    for pixel in faded.pixels_mut() {
+        let Rgba([r, g, b, a]) = *pixel;
+        let luma = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8;
+        *pixel = Rgba([luma, luma, luma, (a as f32 * IDLE_OPACITY) as u8]);
+    }
+
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    faded
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .expect("Failed to encode dial idle icon");
+
+    let base64 = general_purpose::STANDARD.encode(&buffer);
+    format!("data:image/png;base64,{}", base64)
+});
+
 enum BarPosition {
     Upper,
     Lower,

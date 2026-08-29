@@ -1,15 +1,31 @@
 use openaction::{Action, Instance, visible_instances};
 use tux_icons::icon_fetcher::IconFetcher;
 
+use std::collections::HashSet;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
-use crate::gfx::TRANSPARENT_ICON;
+use crate::gfx::{DIAL_IDLE_ICON, TRANSPARENT_ICON};
 use crate::mixer::{self, MixerChannel};
 use crate::plugin::{COLUMN_TO_CHANNEL_MAP, VolumeControllerAction};
 
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
+
+/// Built-in OpenDeck touchscreen layouts used on the dial:
+/// - `$B1`: icon + title + value + volume bar, used while a channel is assigned.
+/// - `$X1`: just a centered icon (no bar, no value; title item exists but is
+///   disabled), used while the dial has no app to show.
+const ENCODER_LAYOUT_ACTIVE: &str = "$B1";
+const ENCODER_LAYOUT_IDLE: &str = "$X1";
+
+/// Instance IDs currently switched to `$X1`, so we only send a
+/// `setFeedbackLayout` (which forces a full re-render) when a dial actually
+/// transitions between "has an app" and "idle", not on every refresh.
+static IDLE_ENCODER_LAYOUTS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::const_new(HashSet::new()));
 
 /// Which kind of physical control an action instance is bound to.
 /// Keypad columns and Encoder (dial) columns are numbered independently by
@@ -158,6 +174,17 @@ pub async fn update_stream_deck_buttons() {
 /// Push the current channel state (icon, app name, volume%) to a dial's
 /// touchscreen segment via the `$B1` built-in layout (icon + title + value + bar).
 pub async fn update_encoder_feedback(channel: &MixerChannel, instance: &Instance) {
+    // If this dial was showing the idle placeholder, switch its layout back
+    // to the full $B1 (icon/title/value/bar) before pushing real data.
+    {
+        let mut idle_layouts = IDLE_ENCODER_LAYOUTS.lock().await;
+        if idle_layouts.remove(&instance.instance_id) {
+            let _ = instance
+                .set_feedback_layout(ENCODER_LAYOUT_ACTIVE.to_string())
+                .await;
+        }
+    }
+
     let icon_uri = if channel.mute {
         channel.icon_uri_mute.clone()
     } else {
@@ -296,11 +323,23 @@ pub fn get_app_icon_uri(
 
 pub async fn cleanup_sd_column(instance: &Instance) {
     if ControllerKind::of(instance) == ControllerKind::Encoder {
+        // No app assigned to this dial: switch to the minimal, centered-icon
+        // layout so the name/percentage/bar don't show at all, and display a
+        // dimmed placeholder icon instead of a blank segment.
+        {
+            let mut idle_layouts = IDLE_ENCODER_LAYOUTS.lock().await;
+            if idle_layouts.insert(instance.instance_id.clone()) {
+                let _ = instance
+                    .set_feedback_layout(ENCODER_LAYOUT_IDLE.to_string())
+                    .await;
+            }
+        }
+
         let feedback = serde_json::json!({
-            "icon": TRANSPARENT_ICON.as_str(),
-            "title": "",
-            "value": "",
-            "indicator": { "value": 0 },
+            "icon": DIAL_IDLE_ICON.as_str(),
+            // $X1 still has a "title" item; an empty value would fall back
+            // to showing the action's own name, so disable it outright.
+            "title": { "enabled": false },
         });
         let _ = instance.set_feedback(&feedback).await;
         return;
