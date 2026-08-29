@@ -1,5 +1,5 @@
 use crate::audio::{AppInfo, AudioSystem};
-use libpulse_binding::volume::ChannelVolumes;
+use libpulse_binding::volume::{ChannelVolumes, Volume};
 use pulsectl::controllers::{AppControl, DeviceControl, SinkController};
 use std::error::Error;
 
@@ -17,25 +17,25 @@ impl PulseAudioSystem {
     }
 }
 
+/// One raw PulseAudio sink-input, before streams belonging to the same app
+/// instance are folded together into a single `AppInfo`.
+struct RawStream {
+    uid: u32,
+    app_name: String,
+    /// `application.process.id`, used to group multiple streams opened by the
+    /// same running process (e.g. a game with separate music/SFX buses).
+    pid: Option<u32>,
+    mute: bool,
+    vol_percent: f32,
+    icon_name: Option<String>,
+}
+
 impl AudioSystem for PulseAudioSystem {
     fn list_applications(&mut self) -> Result<Vec<AppInfo>, Box<dyn Error>> {
         let mut res: Vec<AppInfo> = Vec::new();
 
-        // Add individual applications first to collect all app names
-        let apps = self.controller.list_applications()?;
-
-        // Collect all app names including system mixer if present
-        let mut app_names: Vec<String> = apps
-            .iter()
-            .map(|app| {
-                app.proplist
-                    .get_str("application.name")
-                    .unwrap_or("app_stream".to_string())
-                    .to_lowercase()
-            })
-            .collect();
-
-        // Add the default system sink (main PC audio) only if the global flag is set
+        // Add the default system sink (main PC audio) only if the global flag is set.
+        // It's never grouped with anything else.
         if crate::utils::should_show_system_mixer()
             && let Ok(default_sink) = self.controller.get_default_device()
         {
@@ -44,74 +44,67 @@ impl AudioSystem for PulseAudioSystem {
                 .clone()
                 .unwrap_or("System Audio".to_string());
 
-            // Add system mixer name to app_names for duplicate detection
-            app_names.push(system_name.clone());
-
             res.push(AppInfo {
-                uid: default_sink.index,
+                member_uids: vec![default_sink.index],
                 app_name: system_name,
-                sink_name: Some("System Audio".to_string()),
                 mute: default_sink.mute,
                 vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
                 icon_name: Some("audio-card".to_string()),
                 is_device: true,
-                is_multi_sink_app: false,
             });
         }
 
-        res.extend(apps.into_iter().map(|app| {
-            let app_name = app
-                .proplist
-                .get_str("application.name")
-                .unwrap_or("app_stream".to_string())
-                .to_lowercase();
+        let apps = self.controller.list_applications()?;
 
-            let name_count = app_names.iter().filter(|&name| name == &app_name).count();
-
-            AppInfo {
+        let raw_streams: Vec<RawStream> = apps
+            .into_iter()
+            .map(|app| RawStream {
                 uid: app.index,
-                app_name,
-                sink_name: app.name,
+                app_name: app
+                    .proplist
+                    .get_str("application.name")
+                    .unwrap_or("app_stream".to_string())
+                    .to_lowercase(),
+                pid: app
+                    .proplist
+                    .get_str("application.process.id")
+                    .and_then(|pid| pid.parse().ok()),
                 mute: app.mute,
                 vol_percent: get_pulse_app_volume_percentage(&app.volume),
                 icon_name: app.proplist.get_str("application.icon_name"),
-                is_device: false,
-                is_multi_sink_app: name_count > 1,
-            }
-        }));
+            })
+            .collect();
+
+        res.extend(group_streams(raw_streams));
 
         Ok(res)
     }
 
-    fn increase_volume(
+    fn set_volume(
         &mut self,
         app_index: u32,
-        percent: f64,
+        percent: f32,
         is_device: bool,
     ) -> Result<(), Box<dyn Error>> {
-        if is_device {
-            self.controller
-                .increase_device_volume_by_percent(app_index, percent);
-        } else {
-            self.controller
-                .increase_app_volume_by_percent(app_index, percent);
-        }
-        Ok(())
-    }
+        let target = Volume(((percent.clamp(0.0, 100.0) / 100.0) * PA_VOLUME_NORM as f32) as u32);
 
-    fn decrease_volume(
-        &mut self,
-        app_index: u32,
-        percent: f64,
-        is_device: bool,
-    ) -> Result<(), Box<dyn Error>> {
         if is_device {
-            self.controller
-                .decrease_device_volume_by_percent(app_index, percent);
+            let device = self.controller.get_device_by_index(app_index)?;
+            let mut volumes = device.volume;
+            volumes.set(volumes.len(), target);
+            self.controller.set_device_volume_by_index(app_index, &volumes);
         } else {
-            self.controller
-                .decrease_app_volume_by_percent(app_index, percent);
+            let app = self.controller.get_app_by_index(app_index)?;
+            let mut volumes = app.volume;
+            volumes.set(volumes.len(), target);
+            let op = self
+                .controller
+                .handler
+                .introspect
+                .set_sink_input_volume(app_index, &volumes, None);
+            self.controller.handler.wait_for_operation(op)?;
         }
+
         Ok(())
     }
 
@@ -128,6 +121,55 @@ impl AudioSystem for PulseAudioSystem {
         }
         Ok(())
     }
+}
+
+/// Fold raw sink-inputs that belong to the same app instance (matching
+/// app name + PID) into a single `AppInfo`, preserving first-seen order.
+fn group_streams(raw_streams: Vec<RawStream>) -> Vec<AppInfo> {
+    // (grouping key, accumulated volume sum, member count) kept alongside
+    // `groups` (same index) since `AppInfo` itself has no PID field.
+    let mut keys: Vec<(String, Option<u32>)> = Vec::new();
+    let mut vol_sums: Vec<f32> = Vec::new();
+    let mut vol_counts: Vec<u32> = Vec::new();
+    let mut groups: Vec<AppInfo> = Vec::new();
+
+    for stream in raw_streams {
+        let key = (stream.app_name.clone(), stream.pid);
+        let existing = keys.iter().position(|k| *k == key);
+
+        match existing {
+            Some(idx) => {
+                let group = &mut groups[idx];
+                group.member_uids.push(stream.uid);
+                group.mute = group.mute && stream.mute;
+                if group.icon_name.is_none() {
+                    group.icon_name = stream.icon_name;
+                }
+                vol_sums[idx] += stream.vol_percent;
+                vol_counts[idx] += 1;
+            }
+            None => {
+                keys.push(key);
+                vol_sums.push(stream.vol_percent);
+                vol_counts.push(1);
+                groups.push(AppInfo {
+                    member_uids: vec![stream.uid],
+                    app_name: stream.app_name,
+                    mute: stream.mute,
+                    vol_percent: stream.vol_percent,
+                    icon_name: stream.icon_name,
+                    is_device: false,
+                });
+            }
+        }
+    }
+
+    for (i, group) in groups.iter_mut().enumerate() {
+        group.vol_percent = vol_sums[i] / vol_counts[i] as f32;
+        group.member_uids.sort_unstable();
+    }
+
+    groups
 }
 
 fn get_pulse_app_volume_percentage(channel_volumes: &ChannelVolumes) -> f32 {

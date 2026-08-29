@@ -1,17 +1,55 @@
 use openaction::{Action, Instance, visible_instances};
 use tux_icons::icon_fetcher::IconFetcher;
 
+use std::collections::HashSet;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
-use crate::gfx::TRANSPARENT_ICON;
+use crate::gfx::{DIAL_IDLE_ICON, TRANSPARENT_ICON};
 use crate::mixer::{self, MixerChannel};
 use crate::plugin::{COLUMN_TO_CHANNEL_MAP, VolumeControllerAction};
 
-const MAX_TITLE_CHARS_BEFORE_TRUNCATION: usize = 8;
-
 // Global flag to track if system mixer should be shown
 static SHOW_SYSTEM_MIXER: AtomicBool = AtomicBool::new(false);
+
+/// Built-in OpenDeck touchscreen layouts used on the dial:
+/// - `$B1`: icon + title + value + volume bar, used while a channel is assigned.
+/// - `$X1`: just a centered icon (no bar, no value; title item exists but is
+///   disabled), used while the dial has no app to show.
+const ENCODER_LAYOUT_ACTIVE: &str = "$B1";
+const ENCODER_LAYOUT_IDLE: &str = "$X1";
+
+/// Instance IDs currently switched to `$X1`, so we only send a
+/// `setFeedbackLayout` (which forces a full re-render) when a dial actually
+/// transitions between "has an app" and "idle", not on every refresh.
+static IDLE_ENCODER_LAYOUTS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::const_new(HashSet::new()));
+
+/// Which kind of physical control an action instance is bound to.
+/// Keypad columns and Encoder (dial) columns are numbered independently by
+/// OpenDeck, so they're kept as separate namespaces when mapping to mixer channels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ControllerKind {
+    Keypad,
+    Encoder,
+}
+
+impl From<&str> for ControllerKind {
+    fn from(value: &str) -> Self {
+        match value {
+            "Encoder" => ControllerKind::Encoder,
+            _ => ControllerKind::Keypad,
+        }
+    }
+}
+
+impl ControllerKind {
+    pub fn of(instance: &Instance) -> Self {
+        ControllerKind::from(instance.controller.as_str())
+    }
+}
 
 pub struct ButtonPressControl {
     pub action_id: Option<String>,
@@ -62,14 +100,14 @@ pub fn set_show_system_mixer(value: bool) {
     SHOW_SYSTEM_MIXER.store(value, Ordering::Relaxed);
 }
 
+/// Row count of the Keypad grid only. Encoder (dial) instances always report
+/// row 0 and would otherwise make a hybrid device look like it has a single row.
 pub async fn get_device_row_count() -> Option<u8> {
     let instances = visible_instances(VolumeControllerAction::UUID).await;
-    if instances.is_empty() {
-        return None;
-    }
 
     let max_row = instances
         .iter()
+        .filter(|i| ControllerKind::of(i) == ControllerKind::Keypad)
         .filter_map(|i| i.coordinates.as_ref())
         .map(|coords| coords.row)
         .max()?;
@@ -86,40 +124,111 @@ pub async fn update_stream_deck_buttons() {
         let Some(coords) = instance.coordinates else {
             continue;
         };
-        let sd_column = coords.column;
+        let controller = ControllerKind::of(&instance);
 
-        let Some(&channel_index) = column_map.get(&sd_column) else {
+        let Some(&channel_index) = column_map.get(&(controller, coords.column)) else {
             continue;
         };
 
         let Some(channel) = channels.get_mut(&channel_index) else {
-            if let Some(rows) = row_count {
-                if rows >= 3 {
-                    cleanup_sd_column(&instance).await;
-                } else {
-                    // TODO check if there are knobs/dials too and call appropriate cleanup fn
-                    // update_sd_column_with_knob(&instance).await;
+            match controller {
+                ControllerKind::Encoder => cleanup_sd_column(&instance).await,
+                ControllerKind::Keypad => {
+                    if let Some(rows) = row_count {
+                        if rows >= 3 {
+                            cleanup_sd_column(&instance).await;
+                        } else {
+                            // TODO check if there are mini (2x3) devices too and call appropriate cleanup fn
+                        }
+                    }
                 }
             }
             continue;
         };
 
-        match coords.row {
-            0 => channel.header_id = Some(instance.instance_id.clone()),
-            1 => channel.upper_vol_btn_id = Some(instance.instance_id.clone()),
-            2 => channel.lower_vol_btn_id = Some(instance.instance_id.clone()),
-            _ => {}
-        }
+        match controller {
+            ControllerKind::Encoder => {
+                channel.encoder_id = Some(instance.instance_id.clone());
+                update_encoder_feedback(channel, &instance).await;
+            }
+            ControllerKind::Keypad => {
+                match coords.row {
+                    0 => channel.header_id = Some(instance.instance_id.clone()),
+                    1 => channel.upper_vol_btn_id = Some(instance.instance_id.clone()),
+                    2 => channel.lower_vol_btn_id = Some(instance.instance_id.clone()),
+                    _ => {}
+                }
 
-        if let Some(rows) = row_count {
-            if rows >= 3 {
-                update_sd_column(channel, &instance).await;
-            } else {
-                // TODO same logic as in cleanup for knobs/dials (appropriate update fn)
-                // update_sd_column_with_knob(&instance).await;
+                if let Some(rows) = row_count {
+                    if rows >= 3 {
+                        update_sd_column(channel, &instance).await;
+                    } else {
+                        // TODO same logic as in cleanup for mini (2x3) devices (appropriate update fn)
+                    }
+                }
             }
         }
     }
+}
+
+/// Push the current channel state (icon, app name, volume%) to a dial's
+/// touchscreen segment via the `$B1` built-in layout (icon + title + value + bar).
+pub async fn update_encoder_feedback(channel: &MixerChannel, instance: &Instance) {
+    // If this dial was showing the idle placeholder, switch its layout back
+    // to the full $B1 (icon/title/value/bar) before pushing real data.
+    {
+        let mut idle_layouts = IDLE_ENCODER_LAYOUTS.lock().await;
+        if idle_layouts.remove(&instance.instance_id) {
+            let _ = instance
+                .set_feedback_layout(ENCODER_LAYOUT_ACTIVE.to_string())
+                .await;
+        }
+    }
+
+    let icon_uri = if channel.mute {
+        channel.icon_uri_mute.clone()
+    } else {
+        channel.icon_uri.clone()
+    };
+
+    let title = to_title_case(&channel.app_name);
+
+    let value = if channel.mute {
+        "Muted".to_string()
+    } else {
+        format!("{:.0}%", channel.vol_percent)
+    };
+
+    let indicator_value = if channel.mute {
+        0
+    } else {
+        channel.vol_percent.round() as i64
+    };
+
+    let feedback = serde_json::json!({
+        "icon": icon_uri,
+        "title": title,
+        "value": value,
+        "indicator": { "value": indicator_value },
+    });
+
+    let _ = instance.set_feedback(&feedback).await;
+}
+
+/// Capitalize the first letter of each word for display purposes only.
+/// `app_name` itself stays lowercase everywhere else, since it's matched
+/// verbatim against `ignored_apps_list`.
+fn to_title_case(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
@@ -131,26 +240,9 @@ pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
 
     let _ = instance.set_image(Some(icon_uri), None).await;
 
-    // Set title based on priority: multi-sink app > uses default icon > no title
-    if channel.is_multi_sink_app {
-        let _ = instance
-            .set_title(
-                channel.sink_name.as_ref().map(|name| {
-                    if name.len() > MAX_TITLE_CHARS_BEFORE_TRUNCATION {
-                        format!(
-                            "{}...",
-                            name.chars()
-                                .take(MAX_TITLE_CHARS_BEFORE_TRUNCATION)
-                                .collect::<String>()
-                        )
-                    } else {
-                        name.clone()
-                    }
-                }),
-                None,
-            )
-            .await;
-    } else if channel.uses_default_icon {
+    // Only show a title when we fell back to the generic icon — a real app
+    // icon is recognizable enough on its own.
+    if channel.uses_default_icon {
         let _ = instance
             .set_title(Some(channel.app_name.clone()), None)
             .await;
@@ -230,6 +322,29 @@ pub fn get_app_icon_uri(
 }
 
 pub async fn cleanup_sd_column(instance: &Instance) {
+    if ControllerKind::of(instance) == ControllerKind::Encoder {
+        // No app assigned to this dial: switch to the minimal, centered-icon
+        // layout so the name/percentage/bar don't show at all, and display a
+        // dimmed placeholder icon instead of a blank segment.
+        {
+            let mut idle_layouts = IDLE_ENCODER_LAYOUTS.lock().await;
+            if idle_layouts.insert(instance.instance_id.clone()) {
+                let _ = instance
+                    .set_feedback_layout(ENCODER_LAYOUT_IDLE.to_string())
+                    .await;
+            }
+        }
+
+        let feedback = serde_json::json!({
+            "icon": DIAL_IDLE_ICON.as_str(),
+            // $X1 still has a "title" item; an empty value would fall back
+            // to showing the action's own name, so disable it outright.
+            "title": { "enabled": false },
+        });
+        let _ = instance.set_feedback(&feedback).await;
+        return;
+    }
+
     let _ = instance.set_title(Some(""), None).await;
     let _ = instance
         .set_image(Some(TRANSPARENT_ICON.as_str()), None)
