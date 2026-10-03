@@ -34,6 +34,10 @@
                 showSysMixer.checked =
                     inActionInfo.payload.settings.show_sys_mixer ?? false;
 
+                const volumeStep = document.getElementById("volume_step");
+                volumeStep.value =
+                    inActionInfo.payload.settings.volume_step ?? 5;
+
                 let ignoredAppsList = [];
 
                 const renderIgnoredApps = () => {
@@ -75,6 +79,8 @@
                         console.log("Updating PI with settings:", data.payload.settings);
                         showSysMixer.checked =
                             data.payload.settings.show_sys_mixer ?? false;
+                        volumeStep.value =
+                            data.payload.settings.volume_step ?? 5;
                     } else if (data.event == "didReceiveGlobalSettings") {
                         console.log("Updating PI with global settings:", data.payload.settings);
                         ignoredAppsList = data.payload.settings.ignored_apps_list ?? [];
@@ -95,12 +101,14 @@
                 };
 
                 update = () => {
+                    const step = parseFloat(volumeStep.value);
                     websocket.send(
                         JSON.stringify({
                             event: "setSettings",
                             context: inActionInfo.context,
                             payload: {
                                 show_sys_mixer: showSysMixer.checked,
+                                volume_step: Number.isFinite(step) && step > 0 ? step : 5,
                             },
                         }),
                     );
@@ -129,6 +137,14 @@
                 width: 20px;
                 height: 20px;
                 cursor: pointer;
+            }
+
+            input[type="number"] {
+                width: 60px;
+                background-color: oklch(25% 0 0);
+                border: 1px solid oklch(40% 0 0);
+                border-radius: 4px;
+                padding: 4px 8px;
             }
 
             .section {
@@ -197,6 +213,19 @@
         <div class="section">
             <label for="show_sys_mixer">Show system mixer:</label>
             <input id="show_sys_mixer" type="checkbox" oninput="update();" />
+        </div>
+
+        <div class="section">
+            <label for="volume_step">Volume step (%):</label>
+            <input
+                id="volume_step"
+                type="number"
+                min="1"
+                max="50"
+                step="1"
+                value="5"
+                oninput="update();"
+            />
         </div>
 
         <div class="section">
