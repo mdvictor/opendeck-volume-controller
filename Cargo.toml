@@ -1,6 +1,6 @@
 [package]
 name = "oa-volume-controller"
-version = "1.2.0"
+version = "2.0.0"
 edition = "2024"
 
 [dependencies]
@@ -15,6 +15,6 @@ lazy_static = "1.5"
 async-trait = "0.1"
 libpulse-binding = "2.30"
 anyhow = "1.0"
-image = "0.24"
-base64 = "0.22"
-tux-icons = "0.4.4"
+image = "0.25.10"
+base64 = "0.23.1"
+tux-icons = "0.5.0"
