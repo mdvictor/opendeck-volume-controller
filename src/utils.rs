@@ -2,6 +2,7 @@ use openaction::{Action, Instance, visible_instances};
 use tux_icons::icon_fetcher::IconFetcher;
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -251,34 +252,91 @@ pub async fn update_header(instance: &Instance, channel: &MixerChannel) {
     }
 }
 
-/// Get application icon as base64 data URIs
-/// If icon_name is None, returns the default wave-sound.png icon
-/// Otherwise, attempts to find and encode the system icon for the given icon name
+/// Steam app id of a running process, read from the environment Steam sets
+/// for everything it launches (native games and Proton alike).
+fn steam_app_id(pid: u32) -> Option<(String, Option<PathBuf>)> {
+    let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let mut app_id = None;
+    let mut steam_root = None;
+
+    for var in environ.split(|&b| b == 0) {
+        let var = String::from_utf8_lossy(var);
+        let Some((key, value)) = var.split_once('=') else {
+            continue;
+        };
+        match key {
+            "SteamAppId" | "SteamGameId" | "STEAM_COMPAT_APP_ID"
+                if app_id.is_none() && value != "0" && !value.is_empty() =>
+            {
+                app_id = Some(value.to_string());
+            }
+            "STEAM_COMPAT_CLIENT_INSTALL_PATH" => steam_root = Some(PathBuf::from(value)),
+            _ => {}
+        }
+    }
+
+    app_id.map(|id| (id, steam_root))
+}
+
+/// Find an icon for a game launched by Steam: first the `steam_icon_<id>`
+/// icons Steam installs when it creates a desktop shortcut (largest size
+/// wins), then the small icon kept in Steam's library cache.
+fn steam_icon_path(pid: u32) -> Option<PathBuf> {
+    let (app_id, steam_root) = steam_app_id(pid)?;
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+
+    for data_dir in [home.join(".local/share"), PathBuf::from("/usr/share")] {
+        for size in ["512x512", "256x256", "128x128", "96x96", "64x64", "48x48", "32x32"] {
+            let path = data_dir.join(format!("icons/hicolor/{size}/apps/steam_icon_{app_id}.png"));
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    let steam_roots = steam_root.into_iter().chain([
+        home.join(".local/share/Steam"),
+        home.join(".steam/steam"),
+        home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+    ]);
+    for root in steam_roots {
+        // The app icon is the lone `<hash>.jpg` directly in the app's cache
+        // dir; artwork (header, hero, logo...) lives in subdirectories.
+        let Ok(entries) = std::fs::read_dir(root.join("appcache/librarycache").join(&app_id))
+        else {
+            continue;
+        };
+        let icon = entries.flatten().map(|e| e.path()).find(|p| {
+            p.is_file() && p.extension().is_some_and(|e| e == "jpg" || e == "png")
+        });
+        if icon.is_some() {
+            return icon;
+        }
+    }
+
+    None
+}
+
+/// Get application icon as base64 data URIs.
+/// Tries, in order: the stream's `icon_name` from the icon theme, the Steam
+/// icon of the owning process, the app name from the icon theme, and finally
+/// the default wave-sound.png icon.
 /// Returns (normal_icon_uri, muted_icon_uri, uses_default_icon)
 pub fn get_app_icon_uri(
     icon_name: Option<String>,
     fallback_icon_name: String,
+    pid: Option<u32>,
 ) -> (String, String, bool) {
     use base64::{Engine as _, engine::general_purpose};
-    use std::path::PathBuf;
 
     let fetcher = IconFetcher::new();
-    let mut uses_default_icon = false;
 
-    let icon_path = if let Some(name) = icon_name {
-        fetcher
-            .get_icon_path(name)
-            .or_else(|| fetcher.get_icon_path(fallback_icon_name.clone()))
-            .unwrap_or_else(|| PathBuf::from("img/wave-sound.png"))
-    } else {
-        fetcher
-            .get_icon_path(fallback_icon_name)
-            .unwrap_or_else(|| {
-                // Use default
-                uses_default_icon = true;
-                PathBuf::from("img/wave-sound.png")
-            })
-    };
+    let found = icon_name
+        .and_then(|name| fetcher.get_icon_path(name))
+        .or_else(|| pid.and_then(steam_icon_path))
+        .or_else(|| fetcher.get_icon_path(fallback_icon_name));
+    let uses_default_icon = found.is_none();
+    let icon_path = found.unwrap_or_else(|| PathBuf::from("img/wave-sound.png"));
 
     let image_data = std::fs::read(&icon_path).expect("Failed to read icon file");
 
@@ -286,6 +344,7 @@ pub fn get_app_icon_uri(
         Some("png") => "image/png",
         Some("svg") => "image/svg+xml",
         Some("xpm") => "image/x-xpm",
+        Some("jpg" | "jpeg") => "image/jpeg",
         _ => "image/png",
     };
 

@@ -181,6 +181,7 @@ impl AudioSystem for PulseAudioSystem {
                 mute: default_sink.mute,
                 vol_percent: get_pulse_app_volume_percentage(&default_sink.volume),
                 icon_name: Some("audio-card".to_string()),
+                pid: None,
                 is_device: true,
             });
         }
@@ -304,6 +305,7 @@ fn group_streams(raw_streams: Vec<RawStream>) -> Vec<AppInfo> {
                     mute: stream.mute,
                     vol_percent: stream.vol_percent,
                     icon_name: stream.icon_name,
+                    pid: stream.pid,
                     is_device: false,
                 });
             }

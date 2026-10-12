@@ -11,6 +11,9 @@ pub struct AppInfo {
     pub mute: bool,
     pub vol_percent: f32,
     pub icon_name: Option<String>,
+    /// `application.process.id` of the stream, used to look up an icon from
+    /// the process itself (e.g. its Steam app id) when `icon_name` is missing.
+    pub pid: Option<u32>,
     pub is_device: bool,
 }
 
